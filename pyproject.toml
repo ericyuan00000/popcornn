@@ -42,7 +42,7 @@ dependencies = [
     "pytest",
     "pytest-cov",
     "PyYAML",
-    "torchpathdiffeq @ git+https://github.com/khegazy/torchpathdiffeq.git",
+    "torchpathdiffeq",
     "fairchem-core @ git+https://github.com/ericyuan00000/fairchem.git@patch-2#subdirectory=packages/fairchem-core",
 ]
 
