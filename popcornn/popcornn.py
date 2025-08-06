@@ -113,14 +113,22 @@ class Popcornn:
             else:
                 output_dir = None
 
-            path_output, ts_output = self._optimize(
+            self._optimize(
                 **params, 
                 output_dir=output_dir,
                 output_ase_atoms=output_ase_atoms
             )
-        
-        # Return the optimized path
-        return path_output, ts_output
+
+        # Evaluate points along the optimized path and return
+        time = torch.linspace(self.path.t_init.item(), self.path.t_final.item(), self.num_record_points, device=self.device)
+        ts_time = torch.tensor([self.path.ts_time], device=self.device, dtype=self.dtype)
+        path_output = self.path(time, return_velocities=True, return_energies=True, return_forces=True)
+        ts_output = self.path(ts_time, return_velocities=True, return_energies=True, return_forces=True)
+        if issubclass(self.images.image_type, Atoms) and output_ase_atoms:
+            images, ts_images = output_to_atoms(path_output, self.images), output_to_atoms(ts_output, self.images)
+            return images, ts_images[0]
+        else:
+            return path_output, ts_output
 
     def _optimize(
             self,
@@ -193,13 +201,5 @@ class Popcornn:
                 print(f"Converged at step {optim_idx}")
                 break
             
-        time = torch.linspace(self.path.t_init.item(), self.path.t_final.item(), self.num_record_points, device=self.device)
-        ts_time = torch.tensor([self.path.ts_time], device=self.device, dtype=self.dtype)
-        path_output = self.path(time, return_velocities=True, return_energies=True, return_forces=True)
-        ts_output = self.path(ts_time, return_velocities=True, return_energies=True, return_forces=True)
-        if issubclass(self.images.image_type, Atoms) and output_ase_atoms:
-            images, ts_images = output_to_atoms(path_output, self.images), output_to_atoms(ts_output, self.images)
-            return images, ts_images[0]
-        else:
-            return path_output, ts_output
+        
 
