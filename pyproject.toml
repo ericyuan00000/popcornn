@@ -7,7 +7,7 @@ name = "popcornn"
 description="Path Optimization with a Continuous Representation Neural Network (popcornn) optimizes molecular reaction paths along analytic and MLIP potentials."
 version = "0.1.0"
 readme = "README.md"
-license = "CC-BY-4.0"
+license = { text = "CC-BY 4.0" }
 authors = [
     { name = "Kareem Hegazy", email = "khegazy@berkeley.edu" },
     { name = "Eric C.-Y. Yuan", email = "ericyuan@berkeley.edu" },
