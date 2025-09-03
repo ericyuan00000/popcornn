@@ -364,8 +364,8 @@ def test_uma(dtype, device):
     if device.type == 'cuda' and not torch.cuda.is_available():
         pytest.skip(reason='CUDA is not available, skipping test.')
         
-    if dtype == torch.float64:
-        pytest.skip("UMA potential is not supported for float64 due to precision issues.")
+    # if dtype == torch.float64:
+    #     pytest.skip("UMA potential is not supported for float64 due to precision issues.")
 
     raw_images = [read('tests/images/T1x.xyz', index=i) for i in (0, 1, 1)]
     interpolate(raw_images)

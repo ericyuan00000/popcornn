@@ -205,13 +205,13 @@ def radius_graph(
     data_list = []
     for pos in positions:
         data = AtomicData(
-            pos=pos.to(dtype=torch.float),
+            pos=pos.to(dtype=dtype),
             atomic_numbers=torch.zeros(n_atoms, device=device, dtype=torch.long),
-            cell=cell.unsqueeze(0).to(dtype=torch.float),
+            cell=cell.unsqueeze(0).to(dtype=dtype),
             pbc=pbc.unsqueeze(0),
             natoms=torch.tensor([n_atoms], device=device, dtype=torch.long),
             edge_index=torch.empty((2, 0), device=device, dtype=torch.long),
-            cell_offsets=torch.empty((0, 3), device=device, dtype=torch.float),
+            cell_offsets=torch.empty((0, 3), device=device, dtype=dtype),
             nedges=torch.tensor([0], device=device, dtype=torch.long),
             charge=torch.tensor([0], device=device, dtype=torch.long),
             spin=torch.tensor([0], device=device, dtype=torch.long),
@@ -222,8 +222,9 @@ def radius_graph(
     batch = data_list_collater(data_list, otf_graph=True)
 
     # TODO: remove this when fairchem supports torch.float64
-    batch.pos = batch.pos.to(dtype=dtype)
-    batch.cell = batch.cell.to(dtype=dtype)
+    # batch.pos = batch.pos.to(dtype=dtype)
+    # batch.cell = batch.cell.to(dtype=dtype)
+    # batch.cell_offsets = batch.cell_offsets.to(dtype=dtype)
 
     graph_dict = generate_graph(
         batch,
