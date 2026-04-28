@@ -1,159 +1,123 @@
-import time
 import torch
-import torch.distributed as dist
-import numpy as np
-from dataclasses import dataclass
-from enum import Enum
 
-from torchdiffeq import odeint
-from torchpathdiffeq import SerialAdaptiveStepsizeSolver, get_parallel_RK_solver 
+from torchpathint import path_integral
 
 from .metrics import Metrics, get_loss_fxn
 
-@dataclass
-class IntegralOutput():
-    integral: torch.Tensor
-    times: torch.Tensor
-    geometries: torch.Tensor
+
+_PATH_INTEGRAL_LOSSES = {None, 'path_integral', 'integral'}
+
 
 class ODEintegrator(Metrics):
     def __init__(
             self,
-            method='dopri5',
-            computation='parallel',
+            method='gk21',
             path_loss_name=None,
-            path_loss_params={},
+            path_loss_params=None,
             path_ode_names=None,
             path_ode_scales=None,
+            rtol=1e-6,
+            atol=1e-7,
+            max_batch=None,
+            memory_fraction=None,
+            path_ode_energy_idx=1,
+            path_ode_force_idx=2,
             device=None,
             dtype=None,
-            **kwargs
         ):
-        super().__init__(device, save_energy_force=True)
+        # save_energy_force=False: gradient pipeline only consumes the scalar
+        # metric component of ode_fxn output, not the [E, F] concat.
+        super().__init__(device, save_energy_force=False)
 
-        # Check Parameters
-        assert computation =='parallel' or computation == 'serial',\
-            f"Computation must be 'parallel' or 'serial', instead got {computation}"
-        self.N_integrals = 0
+        if path_loss_name not in _PATH_INTEGRAL_LOSSES:
+            raise NotImplementedError(
+                f"path_loss_name={path_loss_name!r} is not supported under "
+                f"torchpathint yet — only {_PATH_INTEGRAL_LOSSES} are migrated. "
+                "EnergyWeight / GrowingString reach into IntegralOutput fields "
+                "(t_optimal, sum_steps, y0) that no longer exist."
+            )
+
+        self.method = method
+        self.atol = atol
+        self.rtol = rtol
+        self.max_batch = max_batch
+        self.memory_fraction = memory_fraction
         self.device = device
         self.dtype = dtype
-        
-        #self.rtol = rtol
-        #self.atol = atol
+        self.N_integrals = 0
         self.integral_output = None
-        self.add_y_arg = False
 
-        #####  Setup torchpathdiffeq integrator and parallel compute  #####
-        self._setup_integrator_parallism(method, computation, **kwargs)
+        self.path_ode_energy_idx = path_ode_energy_idx
+        self.path_ode_force_idx = path_ode_force_idx
 
-        #####  Build loss funtion to integrate path over  #####
-        ### Setup ode_fxn
         if path_ode_names is None:
             self.eval_fxns = None
             self.eval_fxn_scales = None
             self.ode_fxn = None
         else:
-            self.create_ode_fxn(
-                computation == 'parallel', 
-                path_ode_names,
-                path_ode_scales
-            )
+            self.create_ode_fxn(path_ode_names, path_ode_scales)
 
-        ### Setup loss_fxn
         self.loss_name = path_loss_name
-        self.loss_fxn = get_loss_fxn(path_loss_name, **path_loss_params)
-
-
-    def _setup_integrator_parallism(
-            self,
-            method,
-            computation,
-            rtol=1e-6,
-            atol=1e-7,
-            sample_type='uniform',
-            remove_cut=0.1,
-            path_ode_energy_idx=1,
-            path_ode_force_idx=2,
-            max_batch=None,
-            process=None,
-            is_multiprocess=False,
-            is_load_balance=False,
-            **kwargs
-        ):
-        
-        self.path_ode_energy_idx = path_ode_energy_idx
-        self.path_ode_force_idx = path_ode_force_idx
-        if computation == 'serial':
-            self._integrator = SerialAdaptiveStepsizeSolver(
-                method=self.method,
-                atol=atol,
-                rtol=rtol,
-                t_init=torch.tensor([0], device=self.device, dtype=self.dtype),
-                t_final=torch.tensor([1], device=self.device, dtype=self.dtype),
-                device=self.device,
-                **kwargs
-            )
-            if self.is_load_balance:
-                self.balance_load = self._serial_load_balance
-        elif computation == 'parallel':
-            self._integrator = get_parallel_RK_solver(
-                sample_type,
-                method=method,
-                atol=atol,
-                rtol=rtol,
-                remove_cut=remove_cut,
-                max_path_change=None,
-                y0=torch.tensor([0], device=self.device, dtype=self.dtype),
-                t_init=torch.tensor([0], device=self.device, dtype=self.dtype),
-                t_final=torch.tensor([1], device=self.device, dtype=self.dtype),
-                max_batch=max_batch,
-                error_calc_idx=0,
-                device=self.device.type,
-                **kwargs
-            )
-        else:
-            raise ValueError(f"integrator argument must be either 'parallel' or 'serial', not {computation}.")
-        
-        if is_multiprocess:
-            if self.process is None or not self.process.is_distributed:
-                raise ValueError("Must run program in distributed mode with multiprocess integrator.")
-            self.inner_path_integral = self.path_integral
-            self.integrator = self.multiprocess_path_integral
-            self.run_time = torch.tensor([1], requires_grad=False)# = np.ones(self.process.world_size)
-            if self.is_load_balance:
-                self.mp_times = torch.linspace(
-                    0, 1, self.process.world_size+1, requires_grad=False
-                )
+        self.loss_fxn = get_loss_fxn(path_loss_name, **(path_loss_params or {}))
 
     def integrate_path(
             self,
             path,
-            ode_fxn_scales={},
-            loss_scales={},
+            ode_fxn_scales=None,
+            loss_scales=None,
             t_init=torch.tensor([0.]),
             t_final=torch.tensor([1.]),
-            times=None,
         ):
-        # Update loss parameters
-        self.update_ode_fxn_scales(**ode_fxn_scales)
-        self.loss_fxn.update_parameters(**loss_scales)
-        
-        if times is None:
-            if self.integral_output is None:
-                times = None
-            else:
-                times = self.integral_output.t_optimal
-        integral_output = self._integrator.integrate(
-            ode_fxn=self.ode_fxn,
-            loss_fxn=self.loss_fxn,
-            t=times,
-            t_init=t_init,
-            t_final=t_final,
-            ode_args=(path,),
-            #max_batch=self.max_batch
+        if ode_fxn_scales:
+            self.update_ode_fxn_scales(**ode_fxn_scales)
+        self.loss_fxn.update_parameters(**(loss_scales or {}))
+
+        # torchpathint requires 0-d bounds; popcornn historically passed 1-d.
+        t_init_0d = torch.as_tensor(t_init).squeeze()
+        t_final_0d = torch.as_tensor(t_final).squeeze()
+
+        params = list(path.parameters())
+        sizes = [p.numel() for p in params]
+
+        def f(t_flat):
+            # ode_fxn returns [N, K=1, 1] with save_energy_force=False.
+            l = self.ode_fxn(t_flat.unsqueeze(-1), path)
+            l_per_t = l.reshape(t_flat.shape[0], -1).sum(dim=-1)  # [N], graph live
+            n = l_per_t.shape[0]
+            grad_out = torch.eye(n, device=l_per_t.device, dtype=l_per_t.dtype)
+            grads = torch.autograd.grad(
+                outputs=l_per_t,
+                inputs=params,
+                grad_outputs=grad_out,
+                is_grads_batched=True,
+            )
+            return torch.cat([g.reshape(n, -1) for g in grads], dim=-1)  # [N, D]
+
+        integral_output = path_integral(
+            f,
+            t_init_0d,
+            t_final_0d,
+            method=self.method,
+            atol=self.atol,
+            rtol=self.rtol,
+            max_batch=self.max_batch,
+            memory_fraction=self.memory_fraction,
+            device=self.device,
+            dtype=self.dtype,
         )
-        integral_output.integral = integral_output.integral[0]
+
+        # Scatter the [D] integrated gradient into param.grad. Accumulate so
+        # multiple integrate_path calls between optimizer.zero_grad() compose.
+        offset = 0
+        flat = integral_output.integral.detach()
+        for p, k in zip(params, sizes):
+            chunk = flat[offset:offset + k].reshape(p.shape)
+            p.grad = chunk if p.grad is None else p.grad + chunk
+            offset += k
+
+        # No scalar loss graph in this design. Surface the gradient-norm as a
+        # plateau-friendly proxy for ReduceLROnPlateau-style schedulers.
+        integral_output.loss = flat.norm()
         self.integral_output = integral_output
-        self.loss_fxn.update_parameters(integral_output=self.integral_output)
-        self.N_integrals = self.N_integrals + 1
+        self.N_integrals += 1
         return integral_output
