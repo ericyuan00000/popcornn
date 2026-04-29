@@ -1,0 +1,50 @@
+# Two-stage Müller-Brown: rough then tight.
+#
+# Stage 1 (rough): loose integration, larger step, loose convergence.
+#   The point is to move the path into the basin quickly; quadrature
+#   noise in the gradient is acceptable because the threshold is well
+#   above it.
+# Stage 2 (tight): tight integration, smaller step, tight convergence.
+#   Plus track_loss=true so ∫L dt is logged each iteration for human
+#   monitoring (it is not used to converge).
+#
+# Numbers below are placeholders. Replace them with values picked from
+# tests_ongoing/sweep_tolerance.py output: rough = loosest tolerance
+# whose ‖grad‖ trajectory still descends monotonically; tight = loosest
+# tolerance whose noise floor sits below grad_norm_tol for stage 2.
+initialization_params:
+  images: [[-0.558, 1.442], [0.623, 0.028]]
+  path_params:
+    name: mlp
+    n_embed: 8
+    depth: 4
+    activation: gelu
+optimization_params:
+  - potential_params:
+      name: muller_brown
+    integrator_params:
+      path_ode_names: projected_variational_reaction_energy
+      rtol: 1.0e-2
+      atol: 1.0e-2
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-2
+      grad_norm_tol: 5.0e-2
+      grad_norm_patience: 3
+    num_optimizer_iterations: 200
+
+  - potential_params:
+      name: muller_brown
+    integrator_params:
+      path_ode_names: projected_variational_reaction_energy
+      rtol: 1.0e-5
+      atol: 1.0e-7
+      track_loss: true
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-3
+      grad_norm_tol: 1.0e-3
+      grad_norm_patience: 5
+    num_optimizer_iterations: 1000
