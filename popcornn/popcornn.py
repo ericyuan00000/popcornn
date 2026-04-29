@@ -177,24 +177,26 @@ class Popcornn:
                 path_output = self.path(time, return_velocities=True, return_energies=True, return_forces=True)
                 ts_output = self.path(ts_time, return_velocities=True, return_energies=True, return_forces=True)
                 
+                record = {
+                    "time": time.tolist(),
+                    "positions": path_output.positions.tolist(),
+                    "energies": path_output.energies.tolist(),
+                    "velocities": path_output.velocities.tolist(),
+                    "forces": path_output.forces.tolist(),
+                    "loss_evals": path_integral.y.tolist(),
+                    "integral": path_integral.integral.item(),
+                    "grad_norm": path_integral.loss.item(),
+                    "ts_time": ts_time.tolist(),
+                    "ts_positions": ts_output.positions.tolist(),
+                    "ts_energies": ts_output.energies.tolist(),
+                    "ts_velocities": ts_output.velocities.tolist(),
+                    "ts_forces": ts_output.forces.tolist(),
+                }
+                loss_integral = getattr(path_integral, 'loss_integral', None)
+                if loss_integral is not None:
+                    record["loss_integral"] = loss_integral.tolist()
                 with open(os.path.join(log_dir, f"output_{optim_idx}.json"), 'w') as file:
-                    json.dump(
-                        {
-                            "time": time.tolist(),
-                            "positions": path_output.positions.tolist(),
-                            "energies": path_output.energies.tolist(),
-                            "velocities": path_output.velocities.tolist(),
-                            "forces": path_output.forces.tolist(),
-                            "loss_evals": path_integral.y.tolist(),
-                            "integral": path_integral.integral.item(),
-                            "ts_time": ts_time.tolist(),
-                            "ts_positions": ts_output.positions.tolist(),
-                            "ts_energies": ts_output.energies.tolist(),
-                            "ts_velocities": ts_output.velocities.tolist(),
-                            "ts_forces": ts_output.forces.tolist(),
-                        }, 
-                        file,
-                    )
+                    json.dump(record, file)
 
             # Check for convergence
             if optimizer.converged:
