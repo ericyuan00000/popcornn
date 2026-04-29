@@ -8,11 +8,9 @@ initialization_params:
 optimization_params:
   - potential_params:
       name: wolfe_schlegel
-    integrator_params: 
+    integrator_params:
       rtol: 1.0e-5
       atol: 1.0e-7
-      computation : parallel
-      sample_type : uniform
       path_ode_names: ['projected_variational_reaction_energy', 'variable_reaction_energy']
       path_ode_scales: [1.0, 0.1]
     num_optimizer_iterations: 1000

@@ -279,9 +279,7 @@ class Metrics():
         self._ode_fxn_scales = None
         self._ode_fxns = None
 
-    def create_ode_fxn(self, is_parallel, fxn_names, fxn_scales=None):
-        self.is_parallel = is_parallel
-
+    def create_ode_fxn(self, fxn_names, fxn_scales=None):
         # Parse and check input
         assert fxn_names is not None or len(fxn_names) != 0
         if isinstance(fxn_names, str):
@@ -323,7 +321,6 @@ class Metrics():
 
     def ode_fxn(self, eval_time, path, **kwargs):
         loss = 0
-        eval_time = eval_time if self.is_parallel else eval_time.reshape(1, -1)
         for fxn in self._ode_fxns:
             scale = self._ode_fxn_scales[fxn.__name__]
             ode_loss, ode_variables = fxn(
@@ -339,10 +336,8 @@ class Metrics():
             nans = torch.tensor(
                 [torch.nan,]*len(kwargs['time']),
                 device=self.device
-            )
-            if self.is_parallel:
-                nans = nans.unsqueeze(-1)
-            
+            ).unsqueeze(-1)
+
             keep_variables = [
                 kwargs[name] if name in kwargs and kwargs[name] is not None else nans\
                     for name in ['energies', 'forces']

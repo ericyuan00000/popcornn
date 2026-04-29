@@ -50,7 +50,7 @@ class PathOptimizer():
         if self.has_ts_time_loss:
             self.ts_time_metrics = Metrics(device)
             self.ts_time_metrics.create_ode_fxn(
-                True, self.ts_time_loss_names, self.ts_time_loss_scales
+                self.ts_time_loss_names, self.ts_time_loss_scales
             )
         
         self.ts_region_loss_names = ts_region_loss_names
@@ -58,7 +58,7 @@ class PathOptimizer():
         if self.has_ts_region_loss:
             self.ts_region_metrics = Metrics(device)
             self.ts_region_metrics.create_ode_fxn(
-                True, self.ts_region_loss_names, self.ts_region_loss_scales
+                self.ts_region_loss_names, self.ts_region_loss_scales
             )
         
         #####  Initialize schedulers  #####
@@ -108,7 +108,6 @@ class PathOptimizer():
             integrator,
             t_init=torch.tensor([0.]),
             t_final=torch.tensor([1.]),
-            time=None,
             update_path=True
         ):
         self.optimizer.zero_grad()
@@ -135,20 +134,15 @@ class PathOptimizer():
             loss_scales=path_loss_scales,
             t_init=t_init,
             t_final=t_final,
-            times=time
         )
-        if not path_integral.gradient_taken:
-            path_integral.loss.backward()
-            # (path_integral.integral**2).backward()
-        
+        # integrate_path scatters dL/dθ into path.parameters().grad directly;
+        # no .backward() call here.
+
+
         #####  Transition State  #####
-        # Find transition state 
-        path.ts_search(
-            path_integral.t,
-            path_integral.y[:,:,integrator.path_ode_energy_idx],
-            path_integral.y[:,:,integrator.path_ode_force_idx:],
-            evaluate_ts=False
-        )
+        # ts_search consumes the integrator's quadrature points and assumes
+        # the old torchpathdiffeq RK layout. Skipped under the torchpathint
+        # migration; revisit once the quadrature-output adaptor lands.
 
         # Evaluate transition state losses
         if self.find_ts and path.ts_time is not None:
