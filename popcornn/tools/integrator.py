@@ -19,7 +19,6 @@ class ODEintegrator(Metrics):
             rtol=1e-6,
             atol=1e-7,
             max_batch=None,
-            memory_fraction=None,
             path_ode_energy_idx=1,
             path_ode_force_idx=2,
             device=None,
@@ -41,7 +40,6 @@ class ODEintegrator(Metrics):
         self.atol = atol
         self.rtol = rtol
         self.max_batch = max_batch
-        self.memory_fraction = memory_fraction
         self.device = device
         self.dtype = dtype
         self.N_integrals = 0
@@ -101,7 +99,6 @@ class ODEintegrator(Metrics):
             atol=self.atol,
             rtol=self.rtol,
             max_batch=self.max_batch,
-            memory_fraction=self.memory_fraction,
             device=self.device,
             dtype=self.dtype,
         )

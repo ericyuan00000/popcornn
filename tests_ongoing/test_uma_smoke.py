@@ -24,10 +24,10 @@ def main():
     uma_leg = config.get('optimization_params', [])[1]
     uma_leg['potential_params']['model_name'] = 'uma-s-1p2'
     # Loose tolerance — this is a smoke test, not a convergence study.
+    # Chunking is handled automatically by torchpathint's OOM-shrink path;
+    # nothing to set here.
     uma_leg['integrator_params']['rtol'] = 1e-2
     uma_leg['integrator_params']['atol'] = 1e-2
-    # Auto-size chunks via torchpathint's probe-based estimator.
-    uma_leg['integrator_params']['memory_fraction'] = 0.2
 
     pot = get_potential(images=mep.images, **uma_leg['potential_params'],
                         device=mep.device, dtype=mep.dtype)
