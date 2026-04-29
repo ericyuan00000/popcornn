@@ -112,8 +112,8 @@ class ODEintegrator(Metrics):
             p.grad = chunk if p.grad is None else p.grad + chunk
             offset += k
 
-        # No scalar loss graph in this design. Surface the gradient-norm as a
-        # plateau-friendly proxy for ReduceLROnPlateau-style schedulers.
+        # No scalar loss graph in this design. Surface ‖∫∇L dt‖ as the
+        # convergence signal consumed by PathOptimizer's grad_norm_tol check.
         integral_output.loss = flat.norm()
         self.integral_output = integral_output
         self.N_integrals += 1
