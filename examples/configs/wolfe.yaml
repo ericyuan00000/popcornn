@@ -16,6 +16,6 @@ optimization_params:
       optimizer:
         name: adam
         lr: 1.0e-3
-      grad_norm_tol: 1.0
-      grad_norm_patience: 5
+      threshold: 1.0
+      patience: 5
     num_optimizer_iterations: 500

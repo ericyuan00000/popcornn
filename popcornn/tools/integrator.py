@@ -121,9 +121,9 @@ class ODEintegrator(Metrics):
             offset += k
 
         # No scalar loss graph in this design. Surface ‖∫∇L dt‖_∞ (per-component
-        # max) as the convergence signal consumed by PathOptimizer's grad_norm_tol
+        # max) as the convergence signal consumed by PathOptimizer's threshold
         # check. L∞ is closer to MLP-size-independent than L2 — the latter scales
-        # with √D and forces grad_norm_tol to be retuned per parameter count.
+        # with √D and forces the threshold to be retuned per parameter count.
         integral_output.loss = flat.abs().max()
 
         if self.track_loss:

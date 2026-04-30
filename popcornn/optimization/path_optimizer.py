@@ -24,8 +24,8 @@ class PathOptimizer():
             ts_region_loss_names=None,
             ts_region_loss_scales=torch.ones(1),
             ts_region_loss_schedulers=None,
-            grad_norm_tol=None,
-            grad_norm_patience=1,
+            threshold=None,
+            patience=1,
             device='cpu',
             dtype=None,
             **config
@@ -36,9 +36,9 @@ class PathOptimizer():
         self.device=device
         self.dtype=dtype
         self.iteration = 0
-        self.grad_norm_tol = grad_norm_tol
-        self.grad_norm_patience = grad_norm_patience
-        self._below_tol_count = 0
+        self.threshold = threshold
+        self.patience = patience
+        self._below_threshold_count = 0
         
         ####  Initialize transition state loss information  #####
         self.has_ts_time_loss = ts_time_loss_names is not None
@@ -186,13 +186,13 @@ class PathOptimizer():
         # Convergence: ‖∫∇L dt‖ below threshold for `patience` consecutive
         # iterations. Patience guards against single-step dips driven by
         # adaptive-quadrature error wiggling around the threshold.
-        if self.grad_norm_tol is not None:
-            if path_integral.loss.item() < self.grad_norm_tol:
-                self._below_tol_count += 1
-                if self._below_tol_count >= self.grad_norm_patience:
+        if self.threshold is not None:
+            if path_integral.loss.item() < self.threshold:
+                self._below_threshold_count += 1
+                if self._below_threshold_count >= self.patience:
                     self.converged = True
             else:
-                self._below_tol_count = 0
+                self._below_threshold_count = 0
 
         self.iteration = self.iteration + 1
 

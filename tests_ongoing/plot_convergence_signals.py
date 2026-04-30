@@ -36,8 +36,8 @@ def main():
     leg['integrator_params']['track_loss'] = True
     leg['optimizer_params']['optimizer']['lr'] = LR
     # Strip any convergence trigger so the run goes the full N_STEPS.
-    leg['optimizer_params'].pop('grad_norm_tol', None)
-    leg['optimizer_params'].pop('grad_norm_patience', None)
+    leg['optimizer_params'].pop('threshold', None)
+    leg['optimizer_params'].pop('patience', None)
 
     mep = Popcornn(**base_cfg.get('initialization_params', {}))
     pot = get_potential(images=mep.images, **leg['potential_params'],

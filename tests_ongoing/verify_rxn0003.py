@@ -6,8 +6,8 @@ derived from the Müller-Brown analysis:
 
     rtol = atol = 1e-2          (was 1e-5/1e-7)
     lr = 1e-3                   (unchanged)
-    grad_norm_tol = 1.0         (L∞)
-    grad_norm_patience = 5
+    threshold = 1.0             (L∞)
+    patience = 5
     num_optimizer_iterations = 500
 
 MLP unchanged from the YAML (n_embed=1, depth=2 — tiny by design for this
@@ -39,8 +39,8 @@ STAGE2_OVERRIDES = {
     'rtol': 1e-2,
     'atol': 1e-2,
     'lr': 1e-3,
-    'grad_norm_tol': 1.0,
-    'grad_norm_patience': 5,
+    'threshold': 1.0,
+    'patience': 5,
     'num_optimizer_iterations': 1000,
 }
 
@@ -104,8 +104,8 @@ def main():
     legs[1]['integrator_params']['rtol'] = STAGE2_OVERRIDES['rtol']
     legs[1]['integrator_params']['atol'] = STAGE2_OVERRIDES['atol']
     legs[1]['optimizer_params']['optimizer']['lr'] = STAGE2_OVERRIDES['lr']
-    legs[1]['optimizer_params']['grad_norm_tol'] = STAGE2_OVERRIDES['grad_norm_tol']
-    legs[1]['optimizer_params']['grad_norm_patience'] = STAGE2_OVERRIDES['grad_norm_patience']
+    legs[1]['optimizer_params']['threshold'] = STAGE2_OVERRIDES['threshold']
+    legs[1]['optimizer_params']['patience'] = STAGE2_OVERRIDES['patience']
     legs[1]['num_optimizer_iterations'] = STAGE2_OVERRIDES['num_optimizer_iterations']
 
     mep = Popcornn(**init_params)
@@ -128,8 +128,8 @@ def main():
     axes[1].semilogy(iters, s2['g2'], color='C1', lw=1.0)
     axes[1].set_ylabel(r'$\|\int \nabla_\theta L\,dt\|_2$')
     axes[2].semilogy(iters, s2['ginf'], color='C2', lw=1.0)
-    axes[2].axhline(STAGE2_OVERRIDES['grad_norm_tol'], color='gray', ls='--',
-                    alpha=0.6, label=f'grad_norm_tol={STAGE2_OVERRIDES["grad_norm_tol"]:.0e}')
+    axes[2].axhline(STAGE2_OVERRIDES['threshold'], color='gray', ls='--',
+                    alpha=0.6, label=f'threshold={STAGE2_OVERRIDES["threshold"]:.0e}')
     axes[2].set_ylabel(r'$\|\int \nabla_\theta L\,dt\|_\infty$')
     axes[2].set_xlabel('Stage 2 iteration')
     axes[2].legend(loc='best', fontsize=8)

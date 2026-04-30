@@ -6,7 +6,7 @@ Two signals, two purposes:
     integral. Adam should drive it monotonically down. ‖∫∇L dt‖ is the
     *gradient* of the loss; it wiggles even on healthy cells, so don't use it
     to judge progress.
-  - **Noise floor** — where does ‖∫∇L dt‖ plateau? — sets grad_norm_tol. Read
+  - **Noise floor** — where does ‖∫∇L dt‖ plateau? — sets threshold. Read
     the late-window median of ‖grad‖ off long runs, since the floor is a
     stationary distribution, not a transient.
 
@@ -14,7 +14,7 @@ Sweep A (32 cells, 50 steps each): cross product of (rtol, atol, lr). Picks
 rough (rtol, atol, lr).
 
 Sweep B (3 cells, 200 steps each, lr=1e-3): long runs at tight tolerances to
-expose the ‖grad‖ floor. Picks tight (rtol, atol, grad_norm_tol).
+expose the ‖grad‖ floor. Picks tight (rtol, atol, threshold).
 
 Loss measurement inherits the gradient (rtol, atol). At loss magnitude ~ O(100)
 on Müller-Brown, even rtol=1e-1 leaves enough SNR to read off a ~2× drop.
@@ -262,9 +262,9 @@ def run_sweep_b(base_cfg):
 def pick_rough(a_rows):
     """Loosest descending Sweep A cell, prefer largest lr.
 
-    Rough grad_norm_tol = 10 × late-window ‖grad‖ median, then rounded UP to
+    Rough threshold = 10 × late-window ‖grad‖ median, then rounded UP to
     the next power of ten — sits one order above the observed floor so
-    grad_norm_patience=3 actually triggers convergence.
+    patience=3 actually triggers convergence.
     """
     descending = [r for r in a_rows
                   if not r['failed'] and is_descending(r['loss_integrals'])]
@@ -281,10 +281,10 @@ def pick_rough(a_rows):
     G = chosen['grad_norms']
     lo, hi = late_window(G)
     G_late = window_median(G, lo, hi)
-    grad_norm_tol = round_up_pow10(10 * G_late) if G_late else None
+    threshold = round_up_pow10(10 * G_late) if G_late else None
     return {
         'rtol': chosen['rtol'], 'atol': chosen['atol'], 'lr': chosen['lr'],
-        'grad_norm_tol': grad_norm_tol,
+        'threshold': threshold,
         'g_floor_observed': G_late,
     }
 
@@ -292,7 +292,7 @@ def pick_rough(a_rows):
 def pick_tight(b_rows, a_rows):
     """Loosest Sweep B cell with |g|_late < 1e-3 AND loss plateaued.
 
-    Tight grad_norm_tol = late-window ‖grad‖ median rounded UP to the next
+    Tight threshold = late-window ‖grad‖ median rounded UP to the next
     power of ten. Hard-floor at 1e-4 (fp32 limit on a 2D potential).
     """
     candidates = []
@@ -324,12 +324,12 @@ def pick_tight(b_rows, a_rows):
     if not a_match or not is_descending(a_match[0]['loss_integrals']):
         lr = 1e-4
 
-    grad_norm_tol = round_up_pow10(G_late)
-    if grad_norm_tol is None or grad_norm_tol < 1e-4:
-        grad_norm_tol = 1e-4
+    threshold = round_up_pow10(G_late)
+    if threshold is None or threshold < 1e-4:
+        threshold = 1e-4
     return {
         'rtol': chosen['rtol'], 'atol': chosen['atol'], 'lr': lr,
-        'grad_norm_tol': grad_norm_tol,
+        'threshold': threshold,
         'g_floor_observed': G_late,
     }
 
@@ -345,7 +345,7 @@ def print_recommendation(rough, tight):
         print(f'rough: rtol={fmt(rough["rtol"])} '
               f'atol={fmt(rough["atol"])} '
               f'lr={fmt(rough["lr"])} '
-              f'grad_norm_tol={fmt(rough["grad_norm_tol"])}  '
+              f'threshold={fmt(rough["threshold"])}  '
               f'(observed |g| floor ≈ {rough["g_floor_observed"]:.2e})')
     if tight is None:
         print('tight: no cell met |g|_late < 1e-3 with plateau — extend B_STEPS')
@@ -353,7 +353,7 @@ def print_recommendation(rough, tight):
         print(f'tight: rtol={fmt(tight["rtol"])} '
               f'atol={fmt(tight["atol"])} '
               f'lr={fmt(tight["lr"])} '
-              f'grad_norm_tol={fmt(tight["grad_norm_tol"])}  '
+              f'threshold={fmt(tight["threshold"])}  '
               f'(observed |g| floor ≈ {tight["g_floor_observed"]:.2e})')
 
 
