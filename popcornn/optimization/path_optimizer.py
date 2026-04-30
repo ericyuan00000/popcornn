@@ -24,16 +24,21 @@ class PathOptimizer():
             ts_region_loss_names=None,
             ts_region_loss_scales=torch.ones(1),
             ts_region_loss_schedulers=None,
+            threshold=None,
+            patience=5,
             device='cpu',
             dtype=None,
             **config
         ):
         super().__init__()
-        
+
         self.find_ts = find_ts
         self.device=device
         self.dtype=dtype
         self.iteration = 0
+        self.threshold = threshold
+        self.patience = patience
+        self._below_threshold_count = 0
         
         ####  Initialize transition state loss information  #####
         self.has_ts_time_loss = ts_time_loss_names is not None
@@ -176,14 +181,21 @@ class PathOptimizer():
             for name, sched in self.ts_region_loss_schedulers.items():
                 sched.step()
         if self.lr_scheduler is not None:
-            if isinstance(self.lr_scheduler, lr_scheduler.ReduceLROnPlateau):
-                self.lr_scheduler.step(path_integral.loss.item())
-                if all([last_lr <= min_lr for last_lr, min_lr in zip(self.lr_scheduler.get_last_lr(), self.lr_scheduler.min_lrs)]):
+            self.lr_scheduler.step()
+
+        # Convergence: ‖∫∇L dt‖ below threshold for `patience` consecutive
+        # iterations. Patience guards against single-step dips driven by
+        # adaptive-quadrature error wiggling around the threshold.
+        if self.threshold is not None:
+            if path_integral.loss.item() < self.threshold:
+                self._below_threshold_count += 1
+                if self._below_threshold_count >= self.patience:
                     self.converged = True
             else:
-                self.lr_scheduler.step()
+                self._below_threshold_count = 0
+
         self.iteration = self.iteration + 1
-        
+
         return path_integral
 
     

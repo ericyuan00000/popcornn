@@ -21,6 +21,9 @@ class ODEintegrator(Metrics):
             max_batch=None,
             path_ode_energy_idx=1,
             path_ode_force_idx=2,
+            track_loss=False,
+            loss_rtol=None,
+            loss_atol=None,
             device=None,
             dtype=None,
         ):
@@ -39,6 +42,11 @@ class ODEintegrator(Metrics):
         self.method = method
         self.atol = atol
         self.rtol = rtol
+        # Loss integral is debug-only; let it run at its own (looser by
+        # default) tolerance rather than paying for gradient-grade accuracy.
+        self.track_loss = track_loss
+        self.loss_rtol = loss_rtol if loss_rtol is not None else rtol
+        self.loss_atol = loss_atol if loss_atol is not None else atol
         self.max_batch = max_batch
         self.device = device
         self.dtype = dtype
@@ -112,9 +120,29 @@ class ODEintegrator(Metrics):
             p.grad = chunk if p.grad is None else p.grad + chunk
             offset += k
 
-        # No scalar loss graph in this design. Surface the gradient-norm as a
-        # plateau-friendly proxy for ReduceLROnPlateau-style schedulers.
-        integral_output.loss = flat.norm()
+        # No scalar loss graph in this design. Surface ‖∫∇L dt‖_∞ (per-component
+        # max) as the convergence signal consumed by PathOptimizer's threshold
+        # check. L∞ is closer to MLP-size-independent than L2 — the latter scales
+        # with √D and forces the threshold to be retuned per parameter count.
+        integral_output.loss = flat.abs().max()
+
+        if self.track_loss:
+            def fval(t_flat):
+                l = self.ode_fxn(t_flat.unsqueeze(-1), path)
+                return l.reshape(t_flat.shape[0], -1).detach()
+            loss_output = path_integral(
+                fval,
+                t_init_0d,
+                t_final_0d,
+                method=self.method,
+                atol=self.loss_atol,
+                rtol=self.loss_rtol,
+                max_batch=self.max_batch,
+                device=self.device,
+                dtype=self.dtype,
+            )
+            integral_output.loss_integral = loss_output.integral.detach()
+
         self.integral_output = integral_output
         self.N_integrals += 1
         return integral_output
