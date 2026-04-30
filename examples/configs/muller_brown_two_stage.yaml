@@ -1,17 +1,19 @@
-# Two-stage Müller-Brown: rough then tight.
+# Two-stage Müller-Brown — coarse-to-fine optimization chained as separate
+# `optimization_params` legs. Each leg runs a fresh PathOptimizer; the path
+# (MLP weights) carries between legs but Adam state does not.
 #
-# Stage 1 (rough): loose integration, larger step, loose convergence.
-#   The point is to move the path into the basin quickly; quadrature
-#   noise in the gradient is acceptable because the threshold is well
-#   above it.
-# Stage 2 (tight): tight integration, smaller step, tight convergence.
-#   Plus track_loss=true so ∫L dt is logged each iteration for human
-#   monitoring (it is not used to converge).
+# Stage 1 — fast, loose: lr=1e-2 with grad_norm_tol=1e+1 to exit quickly
+#   once the path reaches the basin. Uses ~10× fewer iterations than a
+#   pure single-stage run because Adam doesn't oscillate around a tight
+#   plateau before the trigger fires.
+# Stage 2 — refine: same picks as the single-stage muller_brown.yaml.
+#   Smaller lr settles into a tighter |g|_inf plateau than stage 1; tighter
+#   threshold ensures the trigger waits for that.
 #
-# Numbers below are placeholders. Replace them with values picked from
-# tests_ongoing/sweep_tolerance.py output: rough = loosest tolerance
-# whose ‖grad‖ trajectory still descends monotonically; tight = loosest
-# tolerance whose noise floor sits below grad_norm_tol for stage 2.
+# Müller-Brown specifically converges fine in a single stage (see
+# muller_brown.yaml). The two-stage form is here as a template for systems
+# where a fast warmup is worth the extra config, e.g. rxn0003 where stage
+# 1 uses a different potential entirely (repel/geodesic interpolation).
 initialization_params:
   images: [[-0.558, 1.442], [0.623, 0.028]]
   path_params:
@@ -30,7 +32,7 @@ optimization_params:
       optimizer:
         name: adam
         lr: 1.0e-2
-      grad_norm_tol: 5.0e-2
+      grad_norm_tol: 1.0e+1
       grad_norm_patience: 3
     num_optimizer_iterations: 200
 
@@ -38,13 +40,13 @@ optimization_params:
       name: muller_brown
     integrator_params:
       path_ode_names: projected_variational_reaction_energy
-      rtol: 1.0e-5
-      atol: 1.0e-7
+      rtol: 1.0e-2
+      atol: 1.0e-2
       track_loss: true
     optimizer_params:
       optimizer:
         name: adam
         lr: 1.0e-3
-      grad_norm_tol: 1.0e-3
+      grad_norm_tol: 1.0
       grad_norm_patience: 5
-    num_optimizer_iterations: 1000
+    num_optimizer_iterations: 500

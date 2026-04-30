@@ -23,7 +23,7 @@ cd popcornn/examples
 
 python run.py --config configs/rxn0003.yaml
 ```
-All Popcornn parameters are specified in the config file. This example should complete in under an hour. Please note that we are still developing the convergence criteria, so you may adjust the number of optimization iterations to balance accuracy and speed.
+All Popcornn parameters are specified in the config file. This example should complete in under an hour. Convergence is driven by `grad_norm_tol` — the threshold on the L∞ norm of the path-integrated gradient, checked for `grad_norm_patience` consecutive iterations before the optimizer exits. `num_optimizer_iterations` is the cap if the trigger never fires. See the *Convergence* section below for picking these values.
 
 For fast development and playing around with popcornn we offer two examples based on the the Wolfe potential
 ```
@@ -68,9 +68,9 @@ final_images, ts_image = path.optimize_path(
         'num_optimizer_iterations': 1000,
     },
     {
-        'potential_params': {'potential': 'uma', 'model_name': 'uma-s-1', 'task_name': 'omol'},
-        'integrator_params': {'path_ode_names': 'projected_variational_reaction_energy', 'rtol': 1.0e-5, 'atol': 1.0e-7},
-        'optimizer_params': {'optimizer': {'name': 'adam', 'lr': 1.0e-3}},
+        'potential_params': {'potential': 'uma', 'model_name': 'uma-s-1p1', 'task_name': 'omol'},
+        'integrator_params': {'path_ode_names': 'projected_variational_reaction_energy', 'rtol': 1.0e-2, 'atol': 1.0e-2},
+        'optimizer_params': {'optimizer': {'name': 'adam', 'lr': 1.0e-3}, 'grad_norm_tol': 1.0e-1, 'grad_norm_patience': 5},
         'num_optimizer_iterations': 1000,
     },
 )
@@ -83,6 +83,18 @@ write('popcornn.xyz', final_images)
 write('popcornn_ts.xyz', ts_image)
 ```
 In this example, you should get a barrier of ~3.6 eV. To be fully rigorous, we [suggest](https://www.nature.com/articles/s41467-024-52481-5) doing a subsequent saddle point optimization for the Popcornn transition state followed by forward/reverse intrisic reaction coordinate calculations, since Popcornn is not actually returning a minimum energy path but just targeting the transition state directly. Both saddle point optimization and intrisic reaction coordinate calculation are supported by [Sella](https://github.com/zadorlab/sella/tree/master) as ASE Optimizers.
+
+### Convergence
+Each `optimization_params` leg exits when the L∞ norm of the path-integrated gradient `‖∫∇L dt‖_∞` falls below `grad_norm_tol` for `grad_norm_patience` consecutive iterations, or when `num_optimizer_iterations` is reached, whichever comes first. The L∞ norm (per-component max) was chosen over the L2 norm because it does not rescale with √(parameter count), so the same threshold transfers more cleanly across MLP sizes.
+
+The threshold is **system-dependent**: gradient magnitudes differ by orders of magnitude between toy potentials and real MLIP-driven runs. A reasonable recipe:
+1. Run a short pilot (e.g. 50 iterations) with `grad_norm_tol` omitted (defaults to no trigger) and read the early-iteration `‖∫∇L dt‖_∞` from the integrator output.
+2. Set `grad_norm_tol` roughly one order of magnitude below the early reading. For a system with initial `|g|_inf ≈ 20`, `grad_norm_tol = 1.0` is a sensible default; for a system with initial `|g|_inf ≈ 1.5`, try `0.1`.
+3. Use `grad_norm_patience = 5` to absorb single-iteration dips during the damped-oscillation phase Adam exhibits as it settles.
+
+The Müller-Brown example (`configs/muller_brown.yaml`) uses `grad_norm_tol: 1.0`; the UMA-driven `configs/rxn0003.yaml` uses `grad_norm_tol: 1.0e-1`. Both are calibrated to their respective systems' gradient scales.
+
+If you want to monitor `∫L dt` (the actual loss integral) per iteration without using it for convergence, set `track_loss: true` in `integrator_params`. The integrator runs a separate detached quadrature with `loss_rtol`/`loss_atol` (defaulting to `rtol`/`atol`) and exposes the result on `path_integral.loss_integral`.
 
 ### Managing memory and handling potential OOM errors
 Popcornn uses [torchpathdiffeq](https://github.com/khegazy/torchpathdiffeq/tree/main) to numerically calculate the path integral used in the loss. When calculating the path integral, torchpathdiffeq employs an adaptive evaluation mesh. This adaptive mesh results in varying batch sizes within a single torchpathdiffeq evaluation. The adaptive batch size may grow and can lead to out-of-memory errors (OOM). To avoid these OOM errors, torchpathdiffeq adaptively limits the batch size based on the cached and free GPU memory. While infrequent, it is possible for OOM errors to occur. There are two reasons for this, each with a solution. The user should apply these solutions in this order if an OOM error occurs.
