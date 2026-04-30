@@ -21,7 +21,7 @@ optimization_params:
     num_optimizer_iterations: 1000
   - potential_params:
       name: uma
-      model_name: uma-s-1
+      model_name: uma-s-1p1
       task_name: omol
     integrator_params: 
       path_ode_names: projected_variational_reaction_energy
