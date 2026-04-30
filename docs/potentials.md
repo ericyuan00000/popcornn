@@ -32,7 +32,7 @@ systems.
 | `harmonic` | N-dimensional harmonic oscillator. |
 | `lennard_jones` | All-atom Lennard-Jones. |
 | `morse` | All-atom Morse pair potential. |
-| `repel` | All-atom soft-repulsive potential. **Use this with `path_ode_names: geodesic` as a pre-step to fix atom clashes.** |
+| `repel` | All-atom soft-repulsive potential. **Use this with `path_integrand_names: geodesic` as a pre-step to fix atom clashes.** |
 
 ## Machine-learned interatomic potentials
 
@@ -127,7 +127,7 @@ MLIPs are trained on physically reasonable geometries. If your
 reactant/product alignment puts two atoms 0.3 Å apart, the MLIP will
 return garbage energies and the optimization will diverge. The
 soft-repulsive `repel` potential, run with
-`path_ode_names: geodesic`, performs **geodesic interpolation**: it
+`path_integrand_names: geodesic`, performs **geodesic interpolation**: it
 warps the path so atoms don't pass through each other, without trying
 to find a transition state. Use it as a first leg, then swap in your
 real MLIP for the second leg.

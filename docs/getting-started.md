@@ -70,7 +70,7 @@ optimization_params:
       model_name: uma-s-1p1
       task_name: omol
     integrator_params:
-      path_ode_names: projected_variational_reaction_energy
+      path_integrand_names: projected_variational_reaction_energy
       rtol: 1.0e-2
       atol: 1.0e-2
     optimizer_params:
@@ -120,7 +120,7 @@ mep = Popcornn(
 final_images, ts_image = mep.optimize_path(
     {
         "potential_params": {"potential": "repel"},
-        "integrator_params": {"path_ode_names": "geodesic"},
+        "integrator_params": {"path_integrand_names": "geodesic"},
         "optimizer_params": {"optimizer": {"name": "adam", "lr": 1.0e-1}},
         "num_optimizer_iterations": 1000,
     },
@@ -131,7 +131,7 @@ final_images, ts_image = mep.optimize_path(
             "task_name": "omol",
         },
         "integrator_params": {
-            "path_ode_names": "projected_variational_reaction_energy",
+            "path_integrand_names": "projected_variational_reaction_energy",
             "rtol": 1.0e-2,
             "atol": 1.0e-2,
         },

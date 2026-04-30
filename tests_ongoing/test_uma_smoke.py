@@ -9,8 +9,8 @@ os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 import torch
 from torchpathint import path_integral
 from popcornn import Popcornn
-from popcornn.tools import import_run_config, ODEintegrator
-from popcornn.optimization.path_optimizer import PathOptimizer
+from popcornn.tools import import_run_config, PathIntegrator, evaluate_integrand_sum
+from popcornn.optimization.optimizer import PathOptimizer
 from popcornn.potentials import get_potential
 
 
@@ -32,14 +32,16 @@ def main():
     pot = get_potential(images=mep.images, **uma_leg['potential_params'],
                         device=mep.device, dtype=mep.dtype)
     mep.path.set_potential(pot)
-    integ = ODEintegrator(**uma_leg['integrator_params'],
+    integ = PathIntegrator(**uma_leg['integrator_params'],
                           device=mep.device, dtype=mep.dtype)
     optr = PathOptimizer(path=mep.path, **uma_leg['optimizer_params'],
                          device=mep.device, dtype=mep.dtype)
 
     def measure_L():
         def fval(t_flat):
-            l = integ.ode_fxn(t_flat.unsqueeze(-1), mep.path)
+            l, _ = evaluate_integrand_sum(
+                integ._terms, t_flat.unsqueeze(-1), mep.path,
+            )
             return l.reshape(t_flat.shape[0], -1).detach()
         out = path_integral(
             fval,
