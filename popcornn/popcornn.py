@@ -121,12 +121,23 @@ class Popcornn:
 
         # Evaluate points along the optimized path and return
         time = torch.linspace(self.path.t_init.item(), self.path.t_final.item(), self.num_record_points, device=self.device)
-        ts_time = torch.tensor([self.path.ts_time], device=self.device, dtype=self.dtype)
         path_output = self.path(time, return_velocities=True, return_energies=True, return_forces=True)
-        ts_output = self.path(ts_time, return_velocities=True, return_energies=True, return_forces=True)
+        # TODO(restore-ts-extraction): TS extraction is None-guarded because
+        # self.path.ts_time stays None unless PathOptimizer.find_ts triggered
+        # the TS-search routine in popcornn/paths/base_path.py. The TS pipeline
+        # is paused under the torchpathint migration (see optimization_step
+        # comment about ts_search consuming the old RK layout). Re-enable —
+        # delete this branch and unconditionally evaluate ts_output — once
+        # find_ts is wired end-to-end again.
+        if self.path.ts_time is not None:
+            ts_time = torch.tensor([self.path.ts_time], device=self.device, dtype=self.dtype)
+            ts_output = self.path(ts_time, return_velocities=True, return_energies=True, return_forces=True)
+        else:
+            ts_output = None
         if issubclass(self.images.image_type, Atoms) and output_ase_atoms:
-            images, ts_images = output_to_atoms(path_output, self.images), output_to_atoms(ts_output, self.images)
-            return images, ts_images[0]
+            images = output_to_atoms(path_output, self.images)
+            ts_image = output_to_atoms(ts_output, self.images)[0] if ts_output is not None else None
+            return images, ts_image
         else:
             return path_output, ts_output
 
