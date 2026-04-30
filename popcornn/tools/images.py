@@ -70,14 +70,32 @@ class Images():
 
 def process_images(raw_images, device, dtype, unwrap_positions=True):
     """
-    Process the images.
+    Normalize raw inputs into an ``Images`` container.
 
-    Parameters:
+    Accepts:
+
+    - a string path to an ``.xyz`` / ``.traj`` / ``.json`` / ``.npy`` /
+      ``.pt`` file,
+    - a list/array/tensor of bare coordinates (no chemistry metadata),
+    - a list of ASE ``Atoms`` (carries cell, pbc, charges, tags,
+      constraints).
+
+    Parameters
     ----------
-    unwrap_positions: bool
-        Whether to unwrap the positions under periodic boundary conditions 
-        using minimum image convention, assuming no atoms move more than half 
-        the box length.
+    raw_images : str | list | np.ndarray | torch.Tensor
+        See above.
+    device : torch.device
+    dtype : torch.dtype
+    unwrap_positions : bool, default=True
+        For periodic systems, unwrap the product (and any
+        intermediate frames) against the reactant using the
+        minimum-image convention. Disable when atoms legitimately
+        move more than half a cell.
+
+    Returns
+    -------
+    Images
+        Validated, on-device, with consistent shape across frames.
     """
     if type(raw_images) == str:
         if raw_images.endswith('.json'):

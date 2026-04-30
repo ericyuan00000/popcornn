@@ -6,13 +6,28 @@ from .linear import LinearPath
 
 class MLPpath(BasePath):
     """
-    Multilayer Perceptron (MLP) path class for generating geometric paths.
+    Neural-network path: linear base + learned correction.
 
-    Args:
-        n_embed (int, optional): Number of embedding dimensions. Defaults to 1.
-        depth (int, optional): Depth of the MLP. Defaults to 2.
-        activation (str, optional): Activation function to use. Defaults to "gelu".
-        base: Path class to correct. Defaults to LinearPath.
+    The configuration at time ``t`` is
+
+    .. math::
+        x(t) = x_\\text{base}(t) + (1 - t)\\, t \\cdot \\text{MLP}(t; \\theta)
+
+    The ``(1 - t) * t`` envelope vanishes at the endpoints, so
+    regardless of what the MLP outputs the path is pinned to the
+    reactant at ``t=0`` and the product at ``t=1``. Only intermediate
+    points are trainable.
+
+    Parameters
+    ----------
+    n_embed : int, default=1
+        Width multiplier on the hidden layers.
+    depth : int, default=2
+        Number of MLP layers (input + hidden + output).
+    activation : str, default="gelu"
+        Any nonlinearity in ``torch.nn`` (case-insensitive).
+    base : BasePath, optional
+        Base path the MLP corrects. Defaults to ``LinearPath``.
     """
     def __init__(
         self,
@@ -48,6 +63,22 @@ class MLPpath(BasePath):
         print(self.mlp)
 
     def get_positions(self, time: float):
+        """
+        Evaluate the path at ``time``.
+
+        Parameters
+        ----------
+        time : torch.Tensor
+            Times in [0, 1]; shape ``[N, 1]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Positions of shape ``[N, D]``.
+        """
+        # (1 - time) * time pins the endpoints — at t=0 and t=1 the
+        # learned correction vanishes so the path matches reactant /
+        # product exactly regardless of MLP weights.
         mlp_out = self.mlp(time) * (1 - time) * time #* 4
         if self.fix_positions is not None:
             mlp_out[:, self.fix_positions] = 0.0

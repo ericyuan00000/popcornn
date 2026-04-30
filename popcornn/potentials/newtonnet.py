@@ -8,14 +8,19 @@ from newtonnet.models.output import NullAggregator
 from .base_potential import BasePotential, PotentialOutput
 
 class NewtonNetPotential(BasePotential):
+    """
+    Wrapper around NewtonNet — equivariant Newtonian-message-passing
+    MLIP. Uses NewtonNet's ASE interface to load the checkpoint, then
+    rewires the radius-graph transform so popcornn can call it
+    directly with batched positions.
+    """
+
     def __init__(self, model_path, **kwargs):
         """
-        Constructor for NewtonNet Potential
-
         Parameters
         ----------
-        model_path: str
-            path to the model. eg. 'weights/newtonnet/model.pt'
+        model_path : str
+            Path to a saved NewtonNet checkpoint.
         """
         super().__init__(**kwargs)
         self.model = self.load_model(model_path)
