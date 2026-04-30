@@ -13,7 +13,7 @@ optimization_params:
   - potential_params:
       name: repel
     integrator_params: 
-      path_ode_names: geodesic
+      path_integrand_names: geodesic
     optimizer_params:
       optimizer:
         name: adam
@@ -24,7 +24,7 @@ optimization_params:
       model_name: uma-s-1p1
       task_name: omol
     integrator_params:
-      path_ode_names: projected_variational_reaction_energy
+      path_integrand_names: projected_variational_reaction_energy
       rtol: 1.0e-2
       atol: 1.0e-2
     optimizer_params:

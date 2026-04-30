@@ -11,7 +11,7 @@ optimization_params:
   - potential_params:
       potential: wolfe_schlegel
     integrator_params:
-      path_ode_names:
+      path_integrand_names:
         - projected_variational_reaction_energy
         - variable_reaction_energy
       method : dopri5
@@ -21,7 +21,7 @@ optimization_params:
       optimizer:
         name: adam
         lr: 1.0e-3
-      path_ode_schedulers:
+      path_integrand_schedulers:
         projected_variational_reaction_energy:
             value: 1.0
             name: linear

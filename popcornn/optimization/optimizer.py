@@ -6,7 +6,16 @@ from torch.nn.functional import interpolate
 from popcornn.tools import scheduler
 from popcornn.tools.scheduler import get_schedulers
 
-from popcornn.tools import Metrics
+from popcornn.tools.integrand import build_integrand_terms, evaluate_integrand_sum
+
+
+def _update_term_scales(terms, scales: dict) -> None:
+    """In-place: set each term's scale from `scales[term.name]` if present."""
+    for name, scale in scales.items():
+        for term in terms:
+            if term.name == name:
+                term.scale = float(scale)
+                break
 
 
 class PathOptimizer():
@@ -25,8 +34,7 @@ class PathOptimizer():
             optimizer=None,
             find_ts=None,
             lr_scheduler=None,
-            path_loss_schedulers=None,
-            path_ode_schedulers=None,
+            path_integrand_schedulers=None,
             ts_time_loss_names=None,
             ts_time_loss_scales=torch.ones(1),
             ts_time_loss_schedulers=None,
@@ -51,8 +59,8 @@ class PathOptimizer():
             ``None`` lets the path's own ``find_ts`` flag decide.
         lr_scheduler : dict, optional
             ``{"name": <torch.optim.lr_scheduler class>, ...kwargs}``.
-        path_loss_schedulers, path_ode_schedulers : dict, optional
-            Schedules for outer-loss params and per-ODE-term scales.
+        path_integrand_schedulers : dict, optional
+            Schedules for per-integrand-term scales.
         ts_time_loss_names, ts_time_loss_scales, ts_time_loss_schedulers : optional
             Loss applied at the predicted TS time. Currently a no-op
             because TS extraction is paused (see
@@ -91,22 +99,19 @@ class PathOptimizer():
         self.ts_time_loss_names = ts_time_loss_names
         self.ts_time_loss_scales = ts_time_loss_scales
         if self.has_ts_time_loss:
-            self.ts_time_metrics = Metrics(device)
-            self.ts_time_metrics.create_ode_fxn(
+            self.ts_time_terms = build_integrand_terms(
                 self.ts_time_loss_names, self.ts_time_loss_scales
             )
-        
+
         self.ts_region_loss_names = ts_region_loss_names
         self.ts_region_loss_scales = ts_region_loss_scales
         if self.has_ts_region_loss:
-            self.ts_region_metrics = Metrics(device)
-            self.ts_region_metrics.create_ode_fxn(
+            self.ts_region_terms = build_integrand_terms(
                 self.ts_region_loss_names, self.ts_region_loss_scales
             )
-        
+
         #####  Initialize schedulers  #####
-        self.ode_fxn_schedulers = get_schedulers(path_ode_schedulers)
-        self.path_loss_schedulers = get_schedulers(path_loss_schedulers)
+        self.integrand_schedulers = get_schedulers(path_integrand_schedulers)
         self.ts_time_loss_schedulers = get_schedulers(ts_time_loss_schedulers)
         self.ts_region_loss_schedulers = get_schedulers(ts_region_loss_schedulers)
         
@@ -180,14 +185,10 @@ class PathOptimizer():
         self.optimizer.zero_grad()
         t_init = t_init.to(self.dtype).to(self.device)
         t_final = t_final.to(self.dtype).to(self.device)
-        ode_fxn_scales = {
-            name : schd.get_value() for name, schd in self.ode_fxn_schedulers.items()
+        integrand_scales = {
+            name : schd.get_value() for name, schd in self.integrand_schedulers.items()
         }
-        path_loss_scales = {
-            name : schd.get_value() for name, schd in self.path_loss_schedulers.items()
-        }
-        path_loss_scales['iteration'] = self.iteration,
-        
+
         if self.has_ts_loss:
             ts_time_loss_scales = {
                 name : schd.get_value() for name, schd in self.ts_time_loss_schedulers.items()
@@ -197,8 +198,7 @@ class PathOptimizer():
             }
         path_integral = integrator.integrate_path(
             path,
-            ode_fxn_scales=ode_fxn_scales,
-            loss_scales=path_loss_scales,
+            integrand_scales=integrand_scales,
             t_init=t_init,
             t_final=t_final,
         )
@@ -214,28 +214,28 @@ class PathOptimizer():
         # Evaluate transition state losses
         if self.find_ts and path.ts_time is not None:
             if self.has_ts_time_loss:
-                self.ts_time_metrics.update_ode_fxn_scales(**ts_time_loss_scales)
-                ts_time_loss = self.ts_time_metrics.ode_fxn(
-                    torch.tensor([[path.ts_time]]), path
-                )[:,0]
-                ts_time_loss.backward()
-            if self.has_ts_region_loss:
-                self.ts_region_metrics.update_ode_fxn_scales(
-                    **ts_region_loss_scales
+                _update_term_scales(self.ts_time_terms, ts_time_loss_scales)
+                ts_time_loss, _ = evaluate_integrand_sum(
+                    self.ts_time_terms,
+                    torch.tensor([[path.ts_time]]),
+                    path,
                 )
-                ts_region_loss = self.ts_region_metrics.ode_fxn(
-                    path.ts_region[:,None], path
-                )[:,0]
-                ts_region_loss.backward()
+                ts_time_loss[:, 0].backward()
+            if self.has_ts_region_loss:
+                _update_term_scales(self.ts_region_terms, ts_region_loss_scales)
+                ts_region_loss, _ = evaluate_integrand_sum(
+                    self.ts_region_terms,
+                    path.ts_region[:, None],
+                    path,
+                )
+                ts_region_loss[:, 0].backward()
 
         #####  Update Optimization  #####
         # Path update step
         if update_path:
             self.optimizer.step()
         # Update schedulers
-        for name, sched in self.ode_fxn_schedulers.items():
-            sched.step() 
-        for name, sched in self.path_loss_schedulers.items():
+        for name, sched in self.integrand_schedulers.items():
             sched.step()
         if self.has_ts_loss:
             for name, sched in self.ts_time_loss_schedulers.items():
