@@ -19,7 +19,16 @@ from popcornn.potentials import get_potential
 
 class Popcornn:
     """
-    Wrapper class for Popcornn optimization.
+    High-level driver for popcornn reaction-path optimization.
+
+    Wraps the path representation, image processing, and
+    multi-leg optimization loop. The typical lifecycle is
+
+    1. Construct with the reactant/product/intermediate images and a
+       ``path_params`` dict that picks the path representation.
+    2. Call ``optimize_path`` with one or more leg-config dicts.
+    3. Receive the optimized path frames and (when TS extraction is
+       active) a single predicted transition-state frame.
     """
     def __init__(
             self, 
@@ -93,18 +102,39 @@ class Popcornn:
             output_ase_atoms: bool = True
     ):
         """
-        Run the optimization.
-        
-        Args:
-            optimization_params (list[dict]): 
-                List of dictionaries containing the parameters for each optimization run.
-                Each dictionary should contain the following keys:
-                - potential_params: Parameters for the potential.
-                - integrator_params: Parameters for the loss integrator.
-                - optimizer_params: Parameters for the path optimizer.
-                - num_optimizer_iterations: Number of optimization iterations.
-            num_record_points (int): 
-                Number of points to record along the path when returning and saving the optimized path.
+        Run a chain of optimization legs and return the final path.
+
+        Each entry of ``optimization_params`` is one leg. The path's
+        trainable parameters persist across legs, so a typical pattern is
+        a cheap ``repel`` + ``geodesic`` clash-resolution leg followed by
+        an MLIP-driven leg targeting the transition state.
+
+        Parameters
+        ----------
+        *optimization_params : dict
+            One dict per leg. Recognized keys:
+
+            ``potential_params``
+                Forwarded to ``get_potential``.
+            ``integrator_params``
+                Forwarded to ``ODEintegrator``.
+            ``optimizer_params``
+                Forwarded to ``PathOptimizer``.
+            ``num_optimizer_iterations``
+                Hard cap on Adam steps for this leg.
+        output_ase_atoms : bool, default=True
+            If True and the input was ASE ``Atoms``, return ``Atoms``
+            objects rather than raw ``PathOutput`` tensors.
+
+        Returns
+        -------
+        images : list[ase.Atoms] or PathOutput
+            ``num_record_points`` frames sampled along the optimized path.
+        ts_image : ase.Atoms or PathOutput or None
+            Predicted transition state as a single frame, or ``None``
+            when the TS-search routine hasn't been wired up (paused under
+            the torchpathint migration; see
+            ``TODO(restore-ts-extraction)`` below).
         """
         # Optimize the path
         for i, params in enumerate(optimization_params):
@@ -151,7 +181,29 @@ class Popcornn:
             output_ase_atoms: bool = True
     ):
         """
-        Optimize the minimum energy path.
+        Run a single optimization leg.
+
+        Builds the potential, integrator, and optimizer for this leg,
+        then steps Adam until either the convergence trigger fires or
+        ``num_optimizer_iterations`` is reached.
+
+        Parameters
+        ----------
+        potential_params : dict
+            Forwarded to ``get_potential``. ``name`` is required.
+        integrator_params : dict
+            Forwarded to ``ODEintegrator``.
+        optimizer_params : dict
+            Forwarded to ``PathOptimizer``. ``threshold`` controls the
+            convergence trigger; see ``docs/convergence.md``.
+        num_optimizer_iterations : int, default=1000
+            Iteration cap.
+        output_dir : str, optional
+            If set, dump per-iteration JSON state under
+            ``{output_dir}/logs/output_<i>.json``.
+        output_ase_atoms : bool, default=True
+            Reserved; kept for parity with ``optimize_path``. Logging
+            here always uses tensor form.
         """
         # Create output directories
         if output_dir is not None:

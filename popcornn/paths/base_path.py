@@ -45,27 +45,21 @@ class PathOutput():
 
 class BasePath(torch.nn.Module):
     """
-    Base class for path representation.
+    Base class for differentiable path representations.
 
-    Attributes:
-    -----------
-    initial_position : torch.Tensor
-        The initial point of the path.
-    final_position : torch.Tensor
-        The final point of the path.
-    potential : PotentialBase
-        The potential function.
+    A path is a smooth mapping ``t -> x(t)`` from ``t in [0, 1]`` to a
+    configuration, with ``x(0)`` pinned at the reactant and ``x(1)`` at
+    the product. Subclasses implement ``get_positions``; this base
+    class wires up
 
-    Methods:
-    --------
-    geometric_path(time, y, *args) -> torch.Tensor:
-        Compute the geometric path at the given time.
+    - velocity computation via autograd (``calculate_velocities``),
+    - periodic-cell wrapping (when ``images.pbc`` is set),
+    - fixed-atom masking,
+    - the ``forward`` interface that popcornn's optimizer drives,
+    - the input/output reshaping that lets the integrator pass either
+      ``[B, T]`` or ``[B, C, T]`` time tensors.
 
-    get_path(time=None, return_velocities=False, return_forces=False) -> PathOutput:
-        Get the path for the given time.
-
-    forward(t, return_velocities=False, return_forces=False) -> PathOutput:
-        Compute the path output for the given time.
+    Subclasses must populate trainable ``torch.nn.Parameter``\\s.
     """
     initial_position: torch.Tensor
     final_position: torch.Tensor
@@ -78,14 +72,22 @@ class BasePath(torch.nn.Module):
             find_ts: bool = True,
         ) -> None:
         """
-        Initialize the BasePath.
+        Initialize the path.
 
-        Parameters:
-        -----------
-        initial_position : torch.Tensor
-            The initial point of the path.
-        final_position : torch.Tensor
-            The final point of the path.
+        Parameters
+        ----------
+        images : Images
+            Processed images. The first frame's positions become
+            ``self.initial_position``, the last frame's become
+            ``self.final_position``. Periodic-cell info, fixed-atom
+            masks, and tags are pulled from here.
+        device : torch.device
+        dtype : torch.dtype
+        find_ts : bool, default=True
+            Whether the optimization loop should attempt
+            transition-state extraction. Currently a hint only — the
+            extraction routine itself is paused under the torchpathint
+            migration.
         """
         super().__init__()
         self.neval = 0
@@ -117,12 +119,10 @@ class BasePath(torch.nn.Module):
             potential: BasePotential,
     ) -> None:
         """
-        Set the potential function.
+        Attach a potential to evaluate energies/forces along the path.
 
-        Parameters:
-        -----------
-        potential : BasePotential
-            The potential function to be used.
+        Each optimization leg constructs its own potential and calls
+        this; the path holds onto the most recently set one.
         """
         self.potential = potential
 
@@ -131,28 +131,36 @@ class BasePath(torch.nn.Module):
             time: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Compute the geometric path at the given time.
+        Evaluate the geometric path at ``time``. Subclasses must override.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         time : torch.Tensor
-            The time at which to evaluate the geometric path.
+            Times in [0, 1]; shape ``[N, 1]``.
 
-        Returns:
-        --------
+        Returns
+        -------
         torch.Tensor
-            The geometric path at the given time.
+            Positions of shape ``[N, D]``.
         """
         raise NotImplementedError()
 
-    
+
     def calculate_velocities(self, t, create_graph=True):
+        """
+        Compute path velocities via autograd.
+
+        Differentiates ``get_positions`` with respect to ``t``. The
+        ``torch.sum`` over the leading axis is a vectorization trick:
+        summing collapses the per-time outputs so a single jacobian
+        call returns ``dx_i/dt_i`` for every i in one pass.
+        """
         return torch.autograd.functional.jacobian(
             lambda t: torch.sum(self.get_positions(t), axis=0),
             t,
             create_graph=create_graph,
             vectorize=True
-        ).transpose(0, 1)[:, :, 0] 
+        ).transpose(0, 1)[:, :, 0]
     
     def _check_output(
             self,
@@ -162,6 +170,13 @@ class BasePath(torch.nn.Module):
             return_forces: bool,
             return_forces_decomposed: bool,
         ):
+        """
+        Raise if the attached potential can't produce a requested field.
+
+        Toy potentials skip force-decomposition; some MLIP wrappers
+        skip energy-decomposition. Catch the missing field at the
+        first call site rather than later in the loss layer.
+        """
         name = type(self.potential).__name__
         if return_energies and potential_output.energies is None:
             raise ValueError(f"Potential {name} cannot calculate energies")
@@ -182,21 +197,30 @@ class BasePath(torch.nn.Module):
             return_forces_decomposed: bool = False,
     ) -> PathOutput:
         """
-        Forward pass to compute the path, potential, velocities, and force.
+        Evaluate the path (and optionally the potential) at given times.
 
-        Parameters:
-        -----------
-        t : torch.Tensor
-            The time tensor at which to evaluate the path.
-        return_velocities : bool, optional
-            Whether to return velocities along the path (default is False).
-        return_forces : bool, optional
-            Whether to return force along the path (default is False).
+        Parameters
+        ----------
+        time : torch.Tensor, optional
+            Times in [0, 1]. Accepts shape ``[B]``, ``[B, T]`` or
+            ``[B, C, T]``; the input shape is restored on the output.
+            ``None`` defaults to 101 points linearly spaced over
+            ``[t_init, t_final]``.
+        return_velocities : bool, default=False
+        return_energies : bool, default=False
+        return_energies_decomposed : bool, default=False
+        return_forces : bool, default=False
+        return_forces_decomposed : bool, default=False
+            Each toggles whether to populate the corresponding field
+            on the returned ``PathOutput``. Disabled-by-default to
+            avoid paying for autograd / potential evaluations the
+            caller doesn't need.
 
-        Returns:
-        --------
+        Returns
+        -------
         PathOutput
-            An instance of the PathOutput class containing the computed path, potential, velocities, force, and time.
+            With ``time`` and ``positions`` always populated; other
+            fields populated when the matching flag is set.
         """
         time = self._reshape_in(time)
 
@@ -235,6 +259,14 @@ class BasePath(torch.nn.Module):
     
 
     def _reshape_in(self, time):
+        """
+        Flatten an arbitrary-shape time tensor to ``[N, T]`` for batched
+        evaluation. ``_reshape_out`` undoes the flatten on the way out.
+
+        The integrator passes ``[B, C, T]`` (batch x quadrature-channel
+        x time) but downstream layers want a flat batch dim, so cache
+        the input shape, rearrange, and remember to invert.
+        """
         if time is None:
             time = torch.linspace(self.t_init.item(), self.t_final.item(), 101, device=self.device, dtype=self.dtype)
         
@@ -256,6 +288,7 @@ class BasePath(torch.nn.Module):
 
 
     def _reshape_out(self, result):
+        """Restore the original shape stashed by ``_reshape_in``."""
         if self._inp_reshaped is None:
             raise RuntimeError("Must call _reshape_in() before _reshape_out()")
         if self._inp_reshaped and result is not None:
@@ -265,6 +298,14 @@ class BasePath(torch.nn.Module):
 
     
     def _ts_search_reformat(self, time, energies, forces, idx_shift):
+        """
+        Drop repeated quadrature times and flatten ``[N_S, T_per_step]``
+        layouts to a single sequence for the TS interpolator.
+
+        The adaptive integrator can hand back overlapping evaluation
+        windows; their shared boundaries appear as duplicates and have
+        to be removed before scipy's interpolator sees them.
+        """
         if len(time.shape) == 3:
             # Remove repeated evaluations
             unique_mask = torch.all(torch.abs(time[0,1:] - time[0,:-1]) > 1e-7, dim=-1)
@@ -298,6 +339,46 @@ class BasePath(torch.nn.Module):
 
 
     def ts_search(self, time, energies=None, forces=None, evaluate_ts=True, topk_E=7, idx_shift=4, N_interp=10000):
+        """
+        Locate the predicted transition state on the current path.
+
+        Picks the top-``topk_E`` highest-energy quadrature points,
+        builds a cubic interpolator around each, oversamples by
+        ``N_interp``, and returns the time at which the interpolated
+        force magnitude is smallest among configurations near the
+        energy maxima — the saddle-point criterion.
+
+        Currently paused under the torchpathint migration: the routine
+        still works on legacy quadrature outputs but ``PathOptimizer``
+        does not call it. See ``optimization/path_optimizer.py``
+        ``optimization_step`` and ``popcornn/popcornn.py`` near
+        ``TODO(restore-ts-extraction)``.
+
+        Parameters
+        ----------
+        time, energies, forces : torch.Tensor
+            Sampled along the path. Missing energies/forces are filled
+            in by re-evaluating the path.
+        evaluate_ts : bool, default=True
+            Re-evaluate the path at the predicted TS time to populate
+            ``self.ts_energy``, ``self.ts_force``,
+            ``self.ts_force_mag`` from the model directly rather than
+            from the interpolator.
+        topk_E : int, default=7
+            How many top-energy candidates to keep before the
+            force-minimization step.
+        idx_shift : int, default=4
+            Half-width (in quadrature points) of the interpolation
+            window around each candidate.
+        N_interp : int, default=10000
+            Oversampling resolution for the cubic interpolator.
+
+        Notes
+        -----
+        Sets ``self.ts_time``, ``self.ts_energy``, ``self.ts_force``,
+        ``self.ts_force_mag``, and ``self.ts_region`` (a small time
+        window around ``ts_time`` used by the TS-region loss).
+        """
         # Calculate missing energies and forces
         calc_energies = energies is None or torch.any(torch.isnan(energies))
         calc_forces = forces is None or torch.any(torch.isnan(forces))

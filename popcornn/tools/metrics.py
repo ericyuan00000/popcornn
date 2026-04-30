@@ -4,6 +4,18 @@ import torch
 
 
 class LossBase():
+    """
+    Base class for outer-loss wrappers around the path integral.
+
+    Subclasses implement ``__call__(integral_output, **kwargs)`` to
+    return a scalar loss. The default ``LossBase.__call__`` reweights
+    per-time integrand contributions by ``get_weights`` —
+    deprecated under torchpathint because it relies on
+    ``IntegralOutput`` fields (``y0``, ``sum_steps``, ``t_optimal``)
+    that no longer exist; ``PathIntegral`` is the only loss currently
+    supported.
+    """
+
     def __init__(self, weight_scale=None) -> None:
         self.weight_scale = weight_scale
         self.iteration = None
@@ -56,22 +68,50 @@ class LossBase():
 
 
 class PathIntegral(LossBase):
+    """
+    Trivial loss: return the path integral as-is.
+
+    The default and currently only fully-supported outer loss.
+    """
+
     def __init__(self) -> None:
         super().__init__()
-    
+
     def __call__(self, integral_output, **kwargs):
         return integral_output.integral[0]
 
 
 class EnergyWeight(LossBase):
+    """
+    Energy-weighted reweighting of the path integral.
+
+    .. note::
+       Reaches into ``integral_output.y[1]`` and the legacy
+       ``y0``/``sum_steps`` fields, which torchpathint does not
+       expose. Kept for reference; raises if you select it.
+    """
+
     def __init__(self) -> None:
         super().__init__()
-    
+
     def get_weights(self, integral_output):
         return torch.mean(integral_output.y[1], dim=1)
 
 
 class GrowingString(LossBase):
+    """
+    Growing-string-style envelope reweighting.
+
+    Builds a weighting function over time that's small in the middle
+    (where the path is making the fastest progress) and full near the
+    endpoints, with tunable envelope shape (``gauss``, ``poly``,
+    ``sine``, ``sine-gauss``, ``butter``).
+
+    .. note::
+       Same legacy-field issue as ``EnergyWeight`` — currently
+       unselectable under torchpathint.
+    """
+
     def __init__(
             self,
             weight_type='inv_sine',
@@ -255,6 +295,11 @@ LOSS_FXNS = {
 }
 
 def get_loss_fxn(name, **kwargs):
+    """
+    Construct a ``LossBase`` subclass by name.
+
+    ``name=None`` returns the default ``PathIntegral``.
+    """
     if name is None:
         return LOSS_FXNS['path_integral']()
     assert name in LOSS_FXNS, f"Cannot find loss {name}, must select from {list(LOSS_FXNS.keys())}"
@@ -263,6 +308,21 @@ def get_loss_fxn(name, **kwargs):
 
 
 class Metrics():
+    """
+    Registry of per-point integrand functions.
+
+    Each ``ode_fxn`` method takes ``eval_time`` plus the path and
+    returns a per-time tensor of loss values plus a dict of cached
+    intermediate quantities (energies, forces, velocities). The
+    integrator selects one or more by name via ``create_ode_fxn``;
+    selected functions are summed (with optional per-term scales)
+    inside ``ode_fxn``.
+
+    To add a new integrand, add a method here that follows the
+    ``(get_required_variables=False, **kwargs)`` protocol and append
+    its name to ``all_ode_fxn_names``.
+    """
+
     all_ode_fxn_names = [
         'projected_variational_reaction_energy',
         'variable_reaction_energy',
@@ -280,6 +340,12 @@ class Metrics():
         self._ode_fxns = None
 
     def create_ode_fxn(self, fxn_names, fxn_scales=None):
+        """
+        Resolve metric names to bound methods and remember per-term scales.
+
+        After this returns, ``self.ode_fxn`` evaluates the weighted
+        sum at any ``eval_time``.
+        """
         # Parse and check input
         assert fxn_names is not None or len(fxn_names) != 0
         if isinstance(fxn_names, str):
@@ -320,6 +386,13 @@ class Metrics():
     
 
     def ode_fxn(self, eval_time, path, **kwargs):
+        """
+        Evaluate ``Σ scale_i * metric_i(eval_time, path)``.
+
+        Per-term metrics share their cached path evaluation through
+        ``kwargs``, so when several terms need the same energies/forces
+        the path is only walked once per ``eval_time`` batch.
+        """
         loss = 0
         for fxn in self._ode_fxns:
             scale = self._ode_fxn_scales[fxn.__name__]
@@ -348,6 +421,10 @@ class Metrics():
 
     
     def update_ode_fxn_scales(self, **kwargs):
+        """
+        Replace one or more per-term scales. Used by schedulers to
+        ramp terms up/down between iterations.
+        """
         for name, scale in kwargs.items():
             assert name in self._ode_fxn_scales
             self._ode_fxn_scales[name] = scale
@@ -357,6 +434,10 @@ class Metrics():
             self,
             eval_time,
             path,
+            # Returns a dict of every variable any metric might want,
+            # re-using cached fields when the input matches a previous
+            # eval_time and only re-walking the path when something is
+            # missing or stale.
             time=None,
             positions=None,
             velocities=None,
@@ -428,10 +509,15 @@ class Metrics():
 
 
     def geodesic(self, get_required_variables=False, **kwargs):
+        """
+        Path-length on a force-decomposed metric:
+        ``‖F_decomposed · v‖₂``. Use with the ``repel`` potential
+        for geodesic interpolation (clash resolution).
+        """
         if get_required_variables:
             return ('forces_decomposed', 'velocities')
         variables = self._parse_input(**kwargs)
-        
+
         projection = torch.einsum(
             'bki,bi->bk',
             variables['forces_decomposed'],
@@ -442,18 +528,27 @@ class Metrics():
 
 
     def variable_reaction_energy(self, get_required_variables=False, **kwargs):
+        """
+        Magnitudes-only product: ``‖F‖ · ‖v‖``. Used in combination
+        with PVRE so that ``VRE - PVRE`` is the angular mismatch.
+        """
         if get_required_variables:
             return ('forces', 'velocities')
         variables = self._parse_input(**kwargs)
-        
+
         F = torch.linalg.norm(variables['forces'], dim=-1, keepdim=True)
         V = torch.linalg.norm(variables['velocities'], dim=-1, keepdim=True)
         return F*V, variables
 
 
     def projected_variational_reaction_energy(self, get_required_variables=False, **kwargs):
+        """
+        ``|v · F|``. Drives configurations where the force is
+        perpendicular to the path direction — the saddle-point
+        condition. Default loss for transition-state search.
+        """
         if get_required_variables:
-            return ('forces', 'velocities') 
+            return ('forces', 'velocities')
         variables = self._parse_input(**kwargs)
         overlap = torch.sum(
             variables['velocities']*variables['forces'],
@@ -464,8 +559,9 @@ class Metrics():
 
 
     def projected_variational_reaction_energy_mag(self, get_required_variables=False, **kwargs):
+        """``‖v ⊙ F‖₂`` — per-component product, then norm."""
         if get_required_variables:
-            return ('forces', 'velocities') 
+            return ('forces', 'velocities')
         variables = self._parse_input(**kwargs)
 
         magnitude = torch.linalg.norm(variables['velocities']*variables['forces'], dim=-1, keepdim=True)
@@ -473,30 +569,36 @@ class Metrics():
 
 
     def E(self, get_required_variables=False, **kwargs):
+        """Raw potential energy."""
         if get_required_variables:
-            return ('energies',) 
+            return ('energies',)
         variables = self._parse_input(**kwargs)
-        
+
         return variables['energies'], variables
-      
+
 
     def E_mean(self, get_required_variables=False, **kwargs):
+        """Mean energy across the (possibly batched) trailing dim."""
         if get_required_variables:
-            return ('energies',) 
+            return ('energies',)
         variables = self._parse_input(**kwargs)
-        
+
         mean_E = torch.mean(variables['energies'], dim=-1, keepdim=True)
         return mean_E, variables
 
 
     def vre_variational_error(self, get_required_variables=False, **kwargs):
+        """
+        ``VRE - PVRE`` — force-velocity angular mismatch. Approaches
+        zero on a true MEP where forces are tangent to the path.
+        """
         if get_required_variables:
             return (
                 *self.projected_variational_reaction_energy(get_required_variables=True),
                 *self.variable_reaction_energy(get_required_variables=True)
-            ) 
+            )
         variables = self._parse_input(**kwargs)
-        
+
         pvre, _ = self.projected_variational_reaction_energy(
             eval_time=kwargs['eval_time'], path=kwargs['path'], **variables
         )
@@ -505,8 +607,9 @@ class Metrics():
         )
         return vre - pvre, variables
 
-    
+
     def F_mag(self, get_required_variables=False, **kwargs):
+        """``‖F‖₂`` — force magnitude. Useful as a TS-time loss."""
         if get_required_variables:
             return ('forces',)
         variables = self._parse_input(**kwargs)

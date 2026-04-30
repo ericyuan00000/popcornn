@@ -8,16 +8,23 @@ from fairchem.core.datasets.atomic_data import AtomicData
 from .base_potential import BasePotential, PotentialOutput
 
 class UMAPotential(BasePotential):
+    """
+    Wrapper around Meta's UMA (universal MLIP).
+
+    Loads a pretrained UMA checkpoint via ``fairchem-core`` and
+    exposes the energy/forces head through popcornn's
+    ``PotentialOutput`` interface. Needs a HuggingFace token plus the
+    model weights — see ``docs/potentials.md`` for setup.
+    """
+
     def __init__(self, model_name, task_name, **kwargs):
         """
-        Constructor for UMA Potential
-
         Parameters
         ----------
-        model_path: str
-            path to the model. eg. 'weights/uma/model.pt'
-        dataset: str
-            dataset name. eg. 'oc20'
+        model_name : str
+            UMA checkpoint identifier, e.g. ``"uma-s-1p1"``.
+        task_name : str
+            UMA task, e.g. ``"omol"``.
         """
         super().__init__(**kwargs)
         self.task_name = task_name
