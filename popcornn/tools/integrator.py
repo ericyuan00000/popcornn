@@ -120,9 +120,11 @@ class ODEintegrator(Metrics):
             p.grad = chunk if p.grad is None else p.grad + chunk
             offset += k
 
-        # No scalar loss graph in this design. Surface ‖∫∇L dt‖ as the
-        # convergence signal consumed by PathOptimizer's grad_norm_tol check.
-        integral_output.loss = flat.norm()
+        # No scalar loss graph in this design. Surface ‖∫∇L dt‖_∞ (per-component
+        # max) as the convergence signal consumed by PathOptimizer's grad_norm_tol
+        # check. L∞ is closer to MLP-size-independent than L2 — the latter scales
+        # with √D and forces grad_norm_tol to be retuned per parameter count.
+        integral_output.loss = flat.abs().max()
 
         if self.track_loss:
             def fval(t_flat):
