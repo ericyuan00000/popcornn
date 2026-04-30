@@ -17,5 +17,4 @@ optimization_params:
         name: adam
         lr: 1.0e-3
       threshold: 1.0
-      patience: 5
     num_optimizer_iterations: 500

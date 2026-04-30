@@ -25,7 +25,7 @@ class PathOptimizer():
             ts_region_loss_scales=torch.ones(1),
             ts_region_loss_schedulers=None,
             threshold=None,
-            patience=1,
+            patience=5,
             device='cpu',
             dtype=None,
             **config

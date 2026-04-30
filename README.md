@@ -70,7 +70,7 @@ final_images, ts_image = path.optimize_path(
     {
         'potential_params': {'potential': 'uma', 'model_name': 'uma-s-1p1', 'task_name': 'omol'},
         'integrator_params': {'path_ode_names': 'projected_variational_reaction_energy', 'rtol': 1.0e-2, 'atol': 1.0e-2},
-        'optimizer_params': {'optimizer': {'name': 'adam', 'lr': 1.0e-3}, 'threshold': 1.0e-1, 'patience': 5},
+        'optimizer_params': {'optimizer': {'name': 'adam', 'lr': 1.0e-3}, 'threshold': 1.0e-1},
         'num_optimizer_iterations': 1000,
     },
 )
@@ -90,7 +90,7 @@ Each `optimization_params` leg exits when the L∞ norm of the path-integrated g
 The threshold is **system-dependent**: gradient magnitudes differ by orders of magnitude between toy potentials and real MLIP-driven runs. A reasonable recipe:
 1. Run a short pilot (e.g. 50 iterations) with `threshold` omitted (defaults to no trigger) and read the early-iteration `‖∫∇L dt‖_∞` from the integrator output.
 2. Set `threshold` roughly one order of magnitude below the early reading. For a system with initial `|g|_inf ≈ 20`, `threshold = 1.0` is a sensible default; for a system with initial `|g|_inf ≈ 1.5`, try `0.1`.
-3. Use `patience = 5` to absorb single-iteration dips during the damped-oscillation phase Adam exhibits as it settles.
+3. Leave `patience` at its default of 5; this absorbs single-iteration dips during the damped-oscillation phase Adam exhibits as it settles. Override only if you have a strong reason to.
 
 The Müller-Brown example (`configs/muller_brown.yaml`) uses `threshold: 1.0`; the UMA-driven `configs/rxn0003.yaml` uses `threshold: 1.0e-1`. Both are calibrated to their respective systems' gradient scales.
 

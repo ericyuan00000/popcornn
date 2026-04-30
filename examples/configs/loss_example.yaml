@@ -19,7 +19,6 @@ optimization_params:
         name: adam
         lr: 1.0e-3
       threshold: 1.0
-      patience: 5
       path_ode_schedulers:
         projected_variational_reaction_energy:
           value: 1.0

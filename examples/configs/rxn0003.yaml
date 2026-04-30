@@ -34,5 +34,4 @@ optimization_params:
       # threshold is system-dependent — initial |g|_inf for this UMA path is
       # ~1.5, plateau ~0.05; 0.1 fires when the loss curve has flattened.
       threshold: 1.0e-1
-      patience: 5
     num_optimizer_iterations: 1000
