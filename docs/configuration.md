@@ -14,7 +14,7 @@ optimization_params:
 The `examples/run.py` driver passes `initialization_params` to
 `Popcornn(...)` and unpacks `optimization_params` (a list) into
 `Popcornn.optimize_path(*params)`. You can mirror this from your own
-Python code; see [Getting Started](getting-started.md#use-the-python-api-directly).
+Python code; see [Getting Started](getting-started.md#4-use-the-python-api-directly).
 
 ## `initialization_params`
 

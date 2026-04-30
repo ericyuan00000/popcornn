@@ -1,5 +1,6 @@
 site_name: popcornn
 site_author: The popcornn authors
+site_url: https://khegazy.github.io/popcornn/
 site_description: >-
   Path Optimization with a Continuous Representation Neural Network —
   reaction path and transition state search on analytic potentials and

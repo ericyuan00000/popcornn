@@ -81,7 +81,7 @@ The 2D analytic potentials (`wolfe_schlegel`, `muller_brown`,
 
 `repel`, `morse`, `harmonic`, `lennard_jones` accept their respective
 parameters; see the source under `popcornn/potentials/` or the
-auto-generated [Code reference](reference/).
+auto-generated [Code reference](reference/popcornn.md).
 
 ## Adding your own potential
 

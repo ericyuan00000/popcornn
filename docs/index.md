@@ -53,4 +53,4 @@ When you want more:
   your own.
 - [Advanced](advanced.md) — schedulers, multi-leg optimization,
   transition-state losses.
-- [Code reference](reference/) — auto-generated API docs.
+- [Code reference](reference/popcornn.md) — auto-generated API docs.
