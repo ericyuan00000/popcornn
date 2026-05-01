@@ -2,7 +2,6 @@ import matplotlib.pyplot as plt
 import torch
 from torch import optim
 from torch.optim import lr_scheduler
-from torch.nn.functional import interpolate
 from popcornn.tools import scheduler
 from popcornn.tools.scheduler import get_schedulers
 

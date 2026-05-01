@@ -1,5 +1,4 @@
 import torch
-import numpy as np
 from dataclasses import dataclass
 from einops import rearrange
 from popcornn.tools import Images, SamplesCache, wrap_positions
