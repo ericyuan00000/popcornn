@@ -70,7 +70,7 @@ optimization_params:
       model_name: uma-s-1p1
       task_name: omol
     integrator_params:
-      path_integrand_names: projected_variational_reaction_energy
+      path_integrand_names: pvre
       rtol: 1.0e-2
       atol: 1.0e-2
     optimizer_params:
@@ -131,7 +131,7 @@ final_images, ts_image = mep.optimize_path(
             "task_name": "omol",
         },
         "integrator_params": {
-            "path_integrand_names": "projected_variational_reaction_energy",
+            "path_integrand_names": "pvre",
             "rtol": 1.0e-2,
             "atol": 1.0e-2,
         },

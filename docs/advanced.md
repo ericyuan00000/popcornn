@@ -26,7 +26,7 @@ final_images, ts_image = mep.optimize_path(
             "task_name": "omol",
         },
         "integrator_params": {
-            "path_integrand_names": "projected_variational_reaction_energy",
+            "path_integrand_names": "pvre",
             "rtol": 1.0e-2,
             "atol": 1.0e-2,
         },
@@ -43,6 +43,28 @@ You can chain more legs — for example, switch loss functions
 mid-optimization, or step the learning rate down across legs. The
 path's network parameters are persistent state on the `Popcornn`
 instance.
+
+### Smooth-then-sharp loss schedule (`pvre_squared → pvre`)
+
+The other canonical multi-leg pattern uses two losses with the same
+saddle-point physics but different optimization dynamics:
+
+- **`pvre_squared`** has a $C^\infty$-smooth integrand, so adaptive
+  Gauss–Kronrod converges in one or two passes per step (~5× cheaper
+  than `pvre`). It drives the path most of the way to the MEP, but its
+  gradient $\partial \ell / \partial \theta \propto 2(v\!\cdot\!F)$
+  vanishes near the saddle ridge, so it plateaus before pinpointing
+  the TS.
+- **`pvre`**'s sign-driven gradient keeps pushing once warm-started,
+  snapping the path onto the saddle in a small number of iterations.
+
+`examples/configs/muller_brown.yaml` ships this schedule and is ~3.5×
+faster than the equivalent single-leg `pvre` config with marginally
+better TS recovery. The Stage-2 learning rate is typically ~1/10 of a
+single-leg `pvre` rate because the path is already close — Adam's small
+steps refine more precisely than they recover. Stage-1 threshold
+follows the [convergence recipe](convergence.md) on the warm-up's own
+gradient scale (initial $g_\infty / \sim\!30$).
 
 ## Schedulers
 
@@ -73,18 +95,18 @@ schedule. Useful for ramping one term down while another ramps up.
 
 ```yaml
 integrator_params:
-  path_integrand_names: ['projected_variational_reaction_energy', 'variable_reaction_energy']
+  path_integrand_names: ['pvre', 'vre']
   path_integrand_scales: [1.0, 0.1]
 
 optimizer_params:
   path_integrand_schedulers:
-    projected_variational_reaction_energy:
+    pvre:
       value: 1.0
       name: cosine
       start_value: 1.0
       end_value: 0.0
       last_step: 99
-    variable_reaction_energy:
+    vre:
       value: 1.0
       name: cosine
       start_value: 0.0
@@ -92,7 +114,7 @@ optimizer_params:
       last_step: 99
 ```
 
-This config ramps the PVRE term from full weight to zero, and VRE from
+This config ramps the pVRE term from full weight to zero, and VRE from
 zero to full weight, over the first 100 iterations.
 
 Available scheduler types:

@@ -36,7 +36,7 @@ def test_save_samples_aligned_with_quadrature_mesh(muller_brown_setup):
     path, device, dtype = muller_brown_setup
     integrator = PathIntegrator(
         method='gk21',
-        path_integrand_names='projected_variational_reaction_energy',
+        path_integrand_names='pvre',
         rtol=1e-2, atol=1e-2,
         save_samples=True,
         device=device, dtype=dtype,
@@ -66,7 +66,7 @@ def test_save_samples_off_yields_none(muller_brown_setup):
     path, device, dtype = muller_brown_setup
     integrator = PathIntegrator(
         method='gk21',
-        path_integrand_names='projected_variational_reaction_energy',
+        path_integrand_names='pvre',
         rtol=1e-2, atol=1e-2,
         save_samples=False,
         device=device, dtype=dtype,

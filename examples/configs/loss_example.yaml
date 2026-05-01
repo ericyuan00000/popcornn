@@ -11,7 +11,7 @@ optimization_params:
     integrator_params:
       rtol: 1.0e-2
       atol: 1.0e-2
-      path_integrand_names: ['projected_variational_reaction_energy', 'variable_reaction_energy']
+      path_integrand_names: ['pvre', 'vre']
       path_integrand_scales: [1.0, 0.1]
     num_optimizer_iterations: 500
     optimizer_params:
@@ -20,13 +20,13 @@ optimization_params:
         lr: 1.0e-3
       threshold: 1.0
       path_integrand_schedulers:
-        projected_variational_reaction_energy:
+        pvre:
           value: 1.0
           name: cosine
           start_value: 1.0
           end_value: 0.0
           last_step: 99
-        variable_reaction_energy:
+        vre:
           value: 1.0
           name: cosine
           start_value: 0.0

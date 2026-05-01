@@ -9,7 +9,7 @@ optimization_params:
   - potential_params:
       name: wolfe_schlegel
     integrator_params:
-      path_integrand_names: projected_variational_reaction_energy
+      path_integrand_names: pvre
       rtol: 1.0e-2
       atol: 1.0e-2
     optimizer_params:

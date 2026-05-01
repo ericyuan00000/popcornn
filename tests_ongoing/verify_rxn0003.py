@@ -1,7 +1,7 @@
 """Verify the new YAML picks transfer to a real-system run (rxn0003 + UMA).
 
 Stage 1 (repel + geodesic, lr=1e-1, 1000 iters): warmup, unchanged.
-Stage 2 (UMA + projected_variational_reaction_energy): apply the picks
+Stage 2 (UMA + pvre): apply the picks
 derived from the Müller-Brown analysis:
 
     rtol = atol = 1e-2          (was 1e-5/1e-7)

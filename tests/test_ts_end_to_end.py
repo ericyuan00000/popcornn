@@ -29,7 +29,7 @@ def test_optimize_path_returns_ts_image():
         {
             'potential_params': {'name': 'muller_brown'},
             'integrator_params': {
-                'path_integrand_names': 'projected_variational_reaction_energy',
+                'path_integrand_names': 'pvre',
                 'rtol': 1e-2,
                 'atol': 1e-2,
             },

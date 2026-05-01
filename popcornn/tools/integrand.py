@@ -1,6 +1,6 @@
 """Path integrand classes and helpers.
 
-One ``PathIntegrand`` ABC plus eight concrete subclasses that each compute a
+One ``PathIntegrand`` ABC plus nine concrete subclasses that each compute a
 per-time integrand value from a dict of cached path quantities. Free
 functions own variable resolution (``resolve_variables``), term construction
 (``build_integrand_terms``), and the weighted-sum loop
@@ -43,8 +43,8 @@ class Geodesic(PathIntegrand):
         return torch.linalg.norm(projection, dim=-1, keepdim=True)
 
 
-class VariableReactionEnergy(PathIntegrand):
-    """``‖F‖ · ‖v‖`` — magnitudes-only product. Pair with PVRE for angular error."""
+class VRE(PathIntegrand):
+    """``‖F‖ · ‖v‖`` — magnitudes-only product. Pair with pVRE for angular error."""
 
     requires = ('forces', 'velocities')
 
@@ -54,8 +54,15 @@ class VariableReactionEnergy(PathIntegrand):
         return F * V
 
 
-class ProjectedVariationalReactionEnergy(PathIntegrand):
-    """``|v · F|``. Drives F⟂path (saddle condition); default TS-search loss."""
+class pVRE(PathIntegrand):
+    """``|v · F|``. Drives F⟂path (saddle condition); default TS-search loss.
+
+    The sign-driven gradient keeps pushing as the path converges, so this
+    snaps onto the saddle ridge precisely — but its kink at v·F=0 makes the
+    integrand expensive to quadrature. Pair with ``pVRESquared`` as a
+    warm-up stage when integration cost matters; see
+    ``examples/configs/muller_brown.yaml``.
+    """
 
     requires = ('forces', 'velocities')
 
@@ -68,7 +75,7 @@ class ProjectedVariationalReactionEnergy(PathIntegrand):
         return torch.abs(overlap)
 
 
-class ProjectedVariationalReactionEnergyMag(PathIntegrand):
+class pVREMag(PathIntegrand):
     """``‖v ⊙ F‖₂`` — per-component product, then norm."""
 
     requires = ('forces', 'velocities')
@@ -79,6 +86,29 @@ class ProjectedVariationalReactionEnergyMag(PathIntegrand):
             dim=-1,
             keepdim=True,
         )
+
+
+class pVRESquared(PathIntegrand):
+    """``(v · F)²`` — smooth pVRE; C^∞ gradient for cleaner adaptive quadrature.
+
+    Same saddle-condition physics as ``pVRE``
+    (zero iff ``v ⊥ F``), but no kink at the zero crossings — ``|s|`` makes
+    ``∂L/∂θ ∝ sign(s)`` jump in t at every crossing, while ``s²`` keeps
+    ``∂L/∂θ ∝ s`` smooth there. The integrator quadratures ``∂L/∂θ`` along
+    the path, so removing those jumps lets adaptive Gauss–Kronrod hit its
+    design convergence rate instead of refining indefinitely around the
+    discontinuities.
+    """
+
+    requires = ('forces', 'velocities')
+
+    def evaluate(self, variables):
+        overlap = torch.sum(
+            variables['velocities'] * variables['forces'],
+            dim=-1,
+            keepdim=True,
+        )
+        return overlap ** 2
 
 
 class Energy(PathIntegrand):
@@ -99,14 +129,14 @@ class EnergyMean(PathIntegrand):
         return torch.mean(variables['energies'], dim=-1, keepdim=True)
 
 
-class VREVariationalError(PathIntegrand):
-    """``VRE - PVRE``. Force-velocity angular mismatch; → 0 on a true MEP."""
+class VREError(PathIntegrand):
+    """``VRE - pVRE``. Force-velocity angular mismatch; → 0 on a true MEP."""
 
     requires = ('forces', 'velocities')
 
     def __init__(self):
-        self._pvre = ProjectedVariationalReactionEnergy()
-        self._vre = VariableReactionEnergy()
+        self._pvre = pVRE()
+        self._vre = VRE()
 
     def evaluate(self, variables):
         return self._vre.evaluate(variables) - self._pvre.evaluate(variables)
@@ -123,10 +153,11 @@ class ForceMagnitude(PathIntegrand):
 
 PATH_INTEGRANDS: dict[str, type[PathIntegrand]] = {
     'geodesic': Geodesic,
-    'projected_variational_reaction_energy': ProjectedVariationalReactionEnergy,
-    'projected_variational_reaction_energy_mag': ProjectedVariationalReactionEnergyMag,
-    'variable_reaction_energy': VariableReactionEnergy,
-    'vre_variational_error': VREVariationalError,
+    'pvre': pVRE,
+    'pvre_mag': pVREMag,
+    'pvre_squared': pVRESquared,
+    'vre': VRE,
+    'vre_error': VREError,
     'E': Energy,
     'E_mean': EnergyMean,
     'F_mag': ForceMagnitude,

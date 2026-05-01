@@ -43,7 +43,7 @@ how much memory you have free. Cap it manually:
 
 ```yaml
 integrator_params:
-  path_integrand_names: projected_variational_reaction_energy
+  path_integrand_names: pvre
   rtol: 1.0e-2
   atol: 1.0e-2
   total_mem_usage: 0.75      # default is 0.9
@@ -59,7 +59,7 @@ If even `total_mem_usage: 0.5` still OOMs, hard-cap the batch:
 
 ```yaml
 integrator_params:
-  path_integrand_names: projected_variational_reaction_energy
+  path_integrand_names: pvre
   max_batch: 32
 ```
 

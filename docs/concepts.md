@@ -75,7 +75,7 @@ most-used in popcornn are:
 - **Geodesic loss** — minimizes path length on a metric defined by the
   decomposed forces. With a repulsive potential this gives geodesic
   interpolation and resolves atom clashes. Good as a pre-step.
-- **Projected variational reaction energy (PVRE)** —
+- **Projected variational reaction energy (pVRE)** —
   $\int_0^1 |\mathbf{v}(t) \cdot \mathbf{F}(t)| \, \mathrm{d}t$, where
   $\mathbf{v}$ is the path velocity and $\mathbf{F}$ is the force.
   Minimizing this drives the path toward configurations where the

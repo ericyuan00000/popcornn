@@ -13,7 +13,7 @@ optimization_params:
       potential: repel
     integrator_params: 
       path_integrand_names:
-        - projected_variational_reaction_energy
+        - pvre
         - geodesic
       path_integrand_scales:
         - 0.1
