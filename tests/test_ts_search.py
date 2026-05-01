@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from popcornn.tools.images import Images
+from popcornn.tools import SamplesCache
 from popcornn.potentials.base_potential import BasePotential
 from popcornn.paths.base_path import BasePath
 
@@ -9,7 +10,7 @@ def test_ts_search():
     torch.manual_seed(2025)
     np.random.seed(2025)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
+
     # Create initial/end points
     x_init = torch.tensor([-1.5, 1, -0.5], device=device)
     x_final = torch.tensor([-0.25, 0.25, 1], device=device)
@@ -19,7 +20,7 @@ def test_ts_search():
         fix_positions=None
     )
     base_path = BasePath(images=images, dtype=x_init.dtype, device=device)
-    
+
     # Create simple path where sum of coordinates is from -1 to 1
     def path(t):
         x = x_init + (x_final - x_init)*t
@@ -42,21 +43,26 @@ def test_ts_search():
             time = 0
         return E, max_E, time
 
-    # Evaluate TS search 
+    # Evaluate TS search
     for l in [2, 3, 4]:
         time = torch.linspace(
             0, 1, 13, device=device, requires_grad=True
         ).unsqueeze(-1)
         positions = path(time)
         energies, ts_energy_truth, ts_time_truth = legendre_like(l, positions)
-        ts_time_truth = 0.5 + ts_time_truth/2. 
+        ts_time_truth = 0.5 + ts_time_truth/2.
         force = BasePotential.calculate_conservative_forces(energies, positions)
-        base_path.ts_search(time[:,0], energies[:,0], force, evaluate_ts=False)
+        samples = SamplesCache(
+            time=time[:, 0].detach(),
+            energies=energies.detach(),
+            forces=force.detach(),
+        )
+        base_path.ts_search(samples, evaluate_ts=False)
 
         ts_position = path(torch.tensor([[base_path.ts_time]], device=device))
         ts_energy, _, _ = legendre_like(l, ts_position)
         ts_energy = ts_energy[0]
-        
+
         assert np.isclose(
             ts_time_truth, base_path.ts_time.cpu().item(), atol=1e-2, rtol=1e-4
         ),\

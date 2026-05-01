@@ -3,9 +3,9 @@ import numpy as np
 import scipy as sp
 from dataclasses import dataclass
 from einops import rearrange
-from popcornn.tools import Images, wrap_positions
+from popcornn.tools import Images, SamplesCache, wrap_positions
 from popcornn.potentials.base_potential import BasePotential, PotentialOutput
-from typing import Callable, Any
+from typing import Callable, Any, Literal
 from ase import Atoms
 from ase.io import read
 
@@ -297,81 +297,57 @@ class BasePath(torch.nn.Module):
         return result
 
     
-    def _ts_search_reformat(self, time, energies, forces, idx_shift):
-        """
-        Drop repeated quadrature times and flatten ``[N_S, T_per_step]``
-        layouts to a single sequence for the TS interpolator.
-
-        The adaptive integrator can hand back overlapping evaluation
-        windows; their shared boundaries appear as duplicates and have
-        to be removed before scipy's interpolator sees them.
-        """
-        if len(time.shape) == 3:
-            # Remove repeated evaluations
-            unique_mask = torch.all(torch.abs(time[0,1:] - time[0,:-1]) > 1e-7, dim=-1)
-            unique_mask = torch.concatenate([unique_mask, torch.tensor([True], device=self.device)])
-            time = time[:,unique_mask]
-            energies = energies[:,unique_mask]
-            forces = forces[:,unique_mask]
-
-            if len(time) > 1 and torch.all(torch.abs(time[:-1,-1] - time[1:,0]) < 1e-7):
-                time = time[:,:-1]
-                energies = energies[:,:-1]
-                forces = forces[:,:-1]
-
-            N_S = time.shape[0] 
-            energies = energies.flatten()
-            time = time[:,:,0].flatten()
-            forces = torch.flatten(forces, start_dim=0, end_dim=1)
-            if N_S > 3:
-                N_C = N_S
-            else:
-                N_C = 1
-                time = time[1:-1]
-                energies = energies[1:-1]
-                forces = forces[1:-1]
-        else:
-            N_C = 1
-            idx_shift = idx_shift*5
-            energies = energies.flatten()
-        
-        return time, energies, forces, N_C
-
-
-    def ts_search(self, time, energies=None, forces=None, evaluate_ts=True, topk_E=7, idx_shift=4, N_interp=10000):
+    def ts_search(
+        self,
+        samples: SamplesCache,
+        *,
+        evaluate_ts: bool = False,
+        criterion: Literal['energy', 'force', 'combined'] = 'combined',
+        topk_E: int = 7,
+        idx_shift: int = 4,
+        N_interp: int = 10000,
+    ):
         """
         Locate the predicted transition state on the current path.
 
-        Picks the top-``topk_E`` highest-energy quadrature points,
-        builds a cubic interpolator around each, oversamples by
-        ``N_interp``, and returns the time at which the interpolated
-        force magnitude is smallest among configurations near the
-        energy maxima — the saddle-point criterion.
+        Operates on samples already collected by ``PathIntegrator`` —
+        no extra path-forward calls are needed (apart from the optional
+        single re-evaluation at the predicted TS time when
+        ``evaluate_ts=True``).
 
-        Currently paused under the torchpathint migration: the routine
-        still works on legacy quadrature outputs but ``PathOptimizer``
-        does not call it. See ``optimization/path_optimizer.py``
-        ``optimization_step`` and ``popcornn/popcornn.py`` near
-        ``TODO(restore-ts-extraction)``.
+        Algorithm
+        ---------
+        1. Pick the ``topk_E`` highest-energy quadrature points.
+        2. For each, build a window of ``±idx_shift`` neighbouring
+           samples and fit cubic interpolators of ``E(t)`` and ``F(t)``.
+        3. Oversample each window at ``N_interp`` points; keep the top
+           candidates by interp E (max) and interp |F| (min) inside it.
+        4. Concatenate candidates across windows.
+        5. Choose the final TS by ``criterion``:
+
+           * ``'energy'``: ``argmax(E)`` over the candidates.
+           * ``'force'``: ``argmin(|F|)`` over the candidates.
+           * ``'combined'``: iteratively keep entries within 2σ of the
+             max E (up to 3 passes), then ``argmin(|F|)`` — the
+             saddle-point criterion the original popcornn used.
 
         Parameters
         ----------
-        time, energies, forces : torch.Tensor
-            Sampled along the path. Missing energies/forces are filled
-            in by re-evaluating the path.
-        evaluate_ts : bool, default=True
-            Re-evaluate the path at the predicted TS time to populate
-            ``self.ts_energy``, ``self.ts_force``,
-            ``self.ts_force_mag`` from the model directly rather than
-            from the interpolator.
+        samples : SamplesCache
+            Per-quadrature-point ``(time, energies, forces)`` from
+            ``PathIntegrator.integrate_path(save_samples=True)``.
+        evaluate_ts : bool, default=False
+            If True, re-evaluate the path at the predicted TS time to
+            replace the interpolator-derived ``ts_energy`` / ``ts_force``
+            with model-truth values. Costs one extra path forward.
+        criterion : {'energy', 'force', 'combined'}, default='combined'
+            Final-pick rule. See Algorithm step 5.
         topk_E : int, default=7
-            How many top-energy candidates to keep before the
-            force-minimization step.
+            Number of high-energy quadrature points to seed windows around.
         idx_shift : int, default=4
-            Half-width (in quadrature points) of the interpolation
-            window around each candidate.
+            Half-width (in quadrature samples) of each interpolation window.
         N_interp : int, default=10000
-            Oversampling resolution for the cubic interpolator.
+            Oversampling resolution for the cubic interpolators.
 
         Notes
         -----
@@ -379,237 +355,102 @@ class BasePath(torch.nn.Module):
         ``self.ts_force_mag``, and ``self.ts_region`` (a small time
         window around ``ts_time`` used by the TS-region loss).
         """
-        # Calculate missing energies and forces
-        calc_energies = energies is None or torch.any(torch.isnan(energies))
-        calc_forces = forces is None or torch.any(torch.isnan(forces))
-        # Calculate energies and forces if too few time points
-        N_input_times = time.shape[0]
-        if len(time.shape) == 3:
-            N_input_times = N_input_times*(time.shape[1] - 1) - 2
-        if N_input_times < 11:
-            time = torch.reshape(time, (-1, time.shape[-1]))
-            time = torch.linspace(time[1,0], time[-2,0], 15, device=self.device, dtype=self.dtype)
-            calc_energies = True
-            calc_forces = True
-        
-        # Calculate energies and forces if necessary
-        if calc_energies or calc_forces:
-            path_output = self.forward(
-                time, return_energies=calc_energies, return_forces=calc_forces
-            )  
-            if calc_energies:
-                energies = path_output.energies
-            if calc_forces:
-                forces = path_output.forces
-        
-        time, energies, forces, N_C = self._ts_search_reformat(
-            time=time, energies=energies, forces=forces, idx_shift=idx_shift
-        )
+        time = samples.time
+        energies = samples.energies.flatten()
+        forces = samples.forces
+        N = energies.shape[0]
+        if N < 2 * idx_shift + 2:
+            raise ValueError(
+                f"ts_search needs at least {2 * idx_shift + 2} samples to "
+                f"build a cubic interpolation window of half-width "
+                f"{idx_shift}; got {N}. Use a finer integrator method or "
+                f"loosen idx_shift."
+            )
 
-        # Find highest energy points
-        _, ts_idxs = torch.topk(energies, min(len(energies), topk_E))
+        # Top-K energy seeds. Clamp window endpoints into [0, N].
+        _, ts_idxs = torch.topk(energies, min(N, topk_E))
+        idxs_min = torch.clamp(ts_idxs - idx_shift, min=0)
+        idxs_max = torch.clamp(ts_idxs + idx_shift + 1, max=N)
+        idx_ranges = {
+            (idxs_min[i].item(), idxs_max[i].item())
+            for i in range(len(ts_idxs))
+        }
 
-        # Start at beginning of integration step
-        ts_idxs = (ts_idxs//N_C)*N_C
-        ts_idxs = torch.unique(ts_idxs, sorted=False)
-
-        # Get time and energy range
-        idxs_min = ts_idxs - idx_shift*N_C
-        idxs_min[idxs_min<N_C] = N_C
-        idxs_max = ts_idxs + idx_shift*(1 + N_C)
-        idxs_max[idxs_max>=len(energies)] = len(energies) - N_C
-        idx_ranges = {(idxs_min[i].item(), idxs_max[i].item()) for i in range(len(idxs_min))}
-        
-        interp_Es = []
-        interp_Fs = []
-        interp_magFs = []
-        interp_times = []
-        top_N = np.max([N_interp//200, 1])
-        ts_time_scale = 0
-        self.ts_force_mag = torch.tensor([np.inf], device=self.device, dtype=self.dtype)
+        interp_Es: list[np.ndarray] = []
+        interp_Fs: list[np.ndarray] = []
+        interp_magFs: list[np.ndarray] = []
+        interp_times: list[np.ndarray] = []
+        top_N = max(N_interp // 200, 1)
+        ts_time_scale = 0.0
         for imin, imax in idx_ranges:
-            t_interp = time[imin:imax].detach().cpu().numpy()
-            #print(time.shape, t_interp.shape, energies[imin:imax].shape, forces[imin:imax].shape)
-            ts_E_interp = sp.interpolate.interp1d(
-                t_interp,
-                energies[imin:imax].detach().cpu().numpy(),
-                kind='cubic'
+            t_window = time[imin:imax].detach().cpu().numpy()
+            E_window = energies[imin:imax].detach().cpu().numpy()
+            F_window = forces[imin:imax].detach().cpu().numpy()
+            E_interp_fn = sp.interpolate.interp1d(t_window, E_window, kind='cubic')
+            F_interp_fn = sp.interpolate.interp1d(t_window, F_window, axis=0, kind='cubic')
+            t_dense = np.linspace(t_window[0] + 1e-12, t_window[-1] - 1e-12, N_interp)
+            E_dense = E_interp_fn(t_dense)
+            F_dense = F_interp_fn(t_dense)
+            magF_dense = np.linalg.norm(F_dense, ord=2, axis=-1).flatten()
+
+            E_top = np.argpartition(E_dense, -top_N)[-top_N:]
+            F_top = np.argpartition(magF_dense, top_N)[:top_N]
+            keep = np.unique(np.concatenate([E_top, F_top]))
+            interp_Es.append(E_dense[keep])
+            interp_Fs.append(F_dense[keep])
+            interp_magFs.append(magF_dense[keep])
+            interp_times.append(t_dense[keep])
+            ts_time_scale = max(ts_time_scale, float(t_window[-1] - t_window[0]))
+
+        E_cand = np.concatenate(interp_Es, axis=0)
+        F_cand = np.concatenate(interp_Fs, axis=0)
+        magF_cand = np.concatenate(interp_magFs, axis=0)
+        t_cand = np.concatenate(interp_times, axis=0)
+
+        if criterion == 'energy':
+            pick = int(np.argmax(E_cand))
+        elif criterion == 'force':
+            pick = int(np.argmin(magF_cand))
+        elif criterion == 'combined':
+            # Iteratively trim entries more than 2σ below the running
+            # max-E so the final argmin |F| is taken among high-energy
+            # candidates only — the saddle-point criterion.
+            mask = np.ones_like(E_cand, dtype=bool)
+            for _ in range(3):
+                live_E = E_cand[mask]
+                if len(live_E) < 2:
+                    break
+                threshold = live_E.max() - 2 * live_E.std()
+                trim = E_cand >= threshold
+                if trim.sum() < 1:
+                    break
+                mask &= trim
+            pick = int(np.argmin(np.where(mask, magF_cand, np.inf)))
+        else:
+            raise ValueError(
+                f"Unknown criterion {criterion!r}; "
+                f"expected one of 'energy', 'force', 'combined'."
             )
-            ts_F_interp = sp.interpolate.interp1d(
-                t_interp, forces[imin:imax].detach().cpu().numpy(), axis=0, kind='cubic'
-            )
-            ts_search = np.linspace(
-                t_interp[0] + 1e-12,
-                t_interp[-1] - 1e-12,
-                N_interp
-            )
-            interp_E = ts_E_interp(ts_search)
-            E_idxs = np.argpartition(interp_E, -top_N)[-top_N:]
-            interp_F = ts_F_interp(ts_search)
-            interp_magF = np.linalg.norm(interp_F, ord=2, axis=-1).flatten()
-            F_idxs = np.argpartition(interp_magF, top_N)[:top_N]
-            interp_idxs = np.unique(np.concatenate([E_idxs, F_idxs]))
-            interp_Es.append(interp_E[interp_idxs])
-            interp_Fs.append(interp_F[interp_idxs])
-            interp_magFs.append(interp_magF[interp_idxs])
-            interp_times.append(ts_search[interp_idxs])
 
-            if t_interp[-1] - t_interp[0] > ts_time_scale:
-                ts_time_scale = t_interp[-1] - t_interp[0] 
-            """
-            ts_idx = np.argmin(interp_magF)
-            if interp_magF[ts_idx] < self.ts_force_mag:
-                self.ts_time = torch.tensor(ts_search[ts_idx], device=self.device)
-                self.ts_force = torch.tensor(interp_F[ts_idx], device=self.device)
-                self.ts_force_mag = interp_magF[ts_idx]
-                ts_E_interp = sp.interpolate.interp1d(
-                    t_interp,
-                    energies[imin:imax].detach().cpu().numpy(),
-                    kind='cubic'
-                )
-                interp_E = ts_E_interp(ts_search)
-                self.ts_energy = torch.tensor(interp_E[ts_idx], device=self.device)
-                ts_time_scale = t_interp[-1] - t_interp[0]
-
-                if False and ts_search[0] < self.orig_ts_time and ts_search[-1] > self.orig_ts_time:
-                    print(self.orig_ts_time.detach().cpu().numpy()[0,0], ts_search)
-                    oidx = np.argmin(np.abs(self.orig_ts_time.detach().cpu().numpy()[0,0] - ts_search))
-                    orig_FM = interp_magF[oidx]
-
-            """
-            #interp_ts.append(ts_search)
-            #interp_Es.append(ts_E_interp(ts_search))
-            #interp_Fs.append(ts_F_interp(ts_search))
-            #interp_magFs.append(np.linalg.norm(interp_Fs[-1], ord=2, axis=-1).flatten())
-            #print("TS time", ts_search[0], ts_search[-1])
-        interp_Es = np.concatenate(interp_Es, axis=0)
-        interp_Fs = np.concatenate(interp_Fs, axis=0)
-        interp_magFs = np.concatenate(interp_magFs, axis=0)
-        interp_times = np.concatenate(interp_times, axis=0)
-
-        # Remove low energy entries with low gradient magnitude
-        max_E = np.amax(interp_Es)
-        for j in range(3):
-            std = np.std(interp_Es)
-            mask = interp_Es > max_E - 2*std
-            if sum(mask) < 1:
-                break
-            interp_Es = interp_Es[mask]
-            interp_Fs = interp_Fs[mask]
-            interp_magFs = interp_magFs[mask]
-            interp_times = interp_times[mask]
-        
-        # TS is the lowest gradient point
-        ts_idx = np.argmin(interp_magFs)
-        self.ts_time = torch.tensor(interp_times[ts_idx], device=self.device, dtype=self.dtype)
-        self.ts_energy = torch.tensor(interp_Es[ts_idx], device=self.device, dtype=self.dtype)
-        self.ts_force = torch.tensor(interp_Fs[ts_idx], device=self.device, dtype=self.dtype)
-        self.ts_force_mag = torch.tensor(interp_magFs[ts_idx], device=self.device, dtype=self.dtype)
+        self.ts_time = torch.tensor(t_cand[pick], device=self.device, dtype=self.dtype)
+        self.ts_energy = torch.tensor(E_cand[pick], device=self.device, dtype=self.dtype)
+        self.ts_force = torch.tensor(F_cand[pick], device=self.device, dtype=self.dtype)
+        self.ts_force_mag = torch.tensor(magF_cand[pick], device=self.device, dtype=self.dtype)
 
         if evaluate_ts:
             ts_output = self.forward(
                 torch.tensor([self.ts_time], device=self.device, dtype=self.dtype),
                 return_velocities=True,
                 return_energies=True,
-                return_forces=True
+                return_forces=True,
             )
             self.ts_energy = ts_output.energies
             self.ts_force = ts_output.forces
             self.ts_force_mag = torch.linalg.norm(self.ts_force, dim=-1)
 
-
-
-
-        #print("NEW METHOD", self.ts_time, self.ts_energy, self.ts_force_mag)
-        #print("OLD METHOD", self.orig_ts_time, self.orig_ts_energy, orig_FM)
-        #if torch.abs(self.ts_time - self.orig_ts_time).flatten()/self.orig_ts_time > 1e-2:
-        #    print("WARNING FAILED CONVERGENCE")
-        """
-        interp_ts = np.array(interp_ts)
-        interp_Es = np.array(interp_Es)
-        interp_Fs = np.array(interp_Fs)
-        interp_magFs = np.array(interp_magFs)
-        ts_idx = np.argmin(interp_magFs)
-
-        idx0 = ts_idx//N_interp
-        idx1 = ts_idx % N_interp
-        self.ts_time = torch.tensor(interp_ts[idx0, idx1], device=self.device)
-        print("TS time", interp_ts[:,0], interp_ts[:,-1])
-        print("SELECTED TS time", self.ts_time)
-        if torch.abs(self.ts_time - self.orig_ts_time).flatten()/self.orig_ts_time > 1e-3:
-            asdfas
-        self.ts_energy = torch.tensor(interp_ts[idx0, idx1], device=self.device)
-        self.ts_force = torch.tensor(interp_Fs[idx0, idx1], device=self.device)
-        self.ts_force_mag = torch.linalg.vector_norm(
-            self.ts_force, ord=2, dim=-1
-        )
-        """
-
-
-        """
-        t_interp = time[:(2*N_C + 1)*idx_shift].detach().cpu().numpy()
-        F_interp = np.stack(
-            [
-                forces[idxs_min[i]:idxs_max[i]].detach().cpu().numpy()\
-                for i in range(len(idxs_max)) 
-            ]
-        )
-        E_interp = np.stack(
-            [
-                energies[idxs_min[i]:idxs_max[i]].detach().cpu().numpy()\
-                for i in range(len(idxs_max)) 
-            ]
-        )
-        print("NEW TS")
-        print("\tidxs: ", idxs_min, idxs_max)
-        #print("\tEs: ", E_interp)
-        ts_E_interp = sp.interpolate.interp1d(
-            t_interp, E_interp, axis=1, kind='cubic'
-        )
-        ts_F_interp = sp.interpolate.interp1d(
-            t_interp, F_interp, axis=1, kind='cubic'
-        )
-        ts_search = np.linspace(
-            t_interp[0] + 1e-12,
-            t_interp[-1] - 1e-12,
-            N_interp
-        )
-        ts_E_search = ts_E_interp(ts_search)
-        ts_F_search = ts_F_interp(ts_search)
-        ts_magF_search = np.linalg.norm(ts_F_search, ord=2, axis=-1).flatten()
-        ts_idx = np.argmin(ts_magF_search)
-        
-
-        #ts_idxs = np.argpartition(ts_E_search.flatten(), -1*topk_F)[-1*topk_F:]
-        #ts_time = ts_search[ts_idxs % N_interp]
-
-        #ts_time = torch.tensor(ts_time) + time[idxs_min[ts_idxs//N_interp]]
-        #path_output = path(ts_time, return_energies=True, return_forces=True)
-        #ts_idx = torch.argmin(
-        #    torch.linalg.vector_norm(path_output.path_force, ord=2, dim=-1)
-        #)
-        
-        idx0 = ts_idx//N_interp
-        idx1 = ts_idx % N_interp
-        self.ts_time = ts_search[idx1]
-        self.ts_time = torch.tensor(self.ts_time, device=self.device) + time[idxs_min[idx0]]
-        print("TS time", ts_search[0] + time[idxs_min], ts_search[-1] + time[idxs_min])
-        print("SELECTED TS time", self.ts_time)
-        self.ts_energy = torch.tensor(ts_E_search[idx0, idx1], device=self.device)
-        self.ts_force = torch.tensor(ts_F_search[idx0, idx1], device=self.device)
-        self.ts_force_mag = torch.linalg.vector_norm(
-            self.ts_force, ord=2, dim=-1
-        )
-        """
-
-        ts_time_scale = t_interp[-1] - t_interp[0]
         self.ts_region = torch.linspace(
-            self.ts_time-ts_time_scale/idx_shift,
-            self.ts_time+ts_time_scale/idx_shift,
+            self.ts_time - ts_time_scale / idx_shift,
+            self.ts_time + ts_time_scale / idx_shift,
             11,
-            device=self.device
+            device=self.device,
         )
-        #self.ts_time = torch.unsqueeze(self.ts_time, -1)
-        #self.ts_time = torch.unsqueeze(self.ts_time, -1)
-        #print(self.ts_energy, self.ts_force_mag, ts_magF_search[ts_idx], self.ts_force)
- 
