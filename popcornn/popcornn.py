@@ -13,7 +13,7 @@ from popcornn.paths import get_path
 from popcornn.optimization import initialize_path
 from popcornn.optimization import PathOptimizer
 from popcornn.tools import process_images, output_to_atoms
-from popcornn.tools import ODEintegrator
+from popcornn.tools import PathIntegrator
 from popcornn.potentials import get_potential
 
 
@@ -117,7 +117,7 @@ class Popcornn:
             ``potential_params``
                 Forwarded to ``get_potential``.
             ``integrator_params``
-                Forwarded to ``ODEintegrator``.
+                Forwarded to ``PathIntegrator``.
             ``optimizer_params``
                 Forwarded to ``PathOptimizer``.
             ``num_optimizer_iterations``
@@ -192,7 +192,7 @@ class Popcornn:
         potential_params : dict
             Forwarded to ``get_potential``. ``name`` is required.
         integrator_params : dict
-            Forwarded to ``ODEintegrator``.
+            Forwarded to ``PathIntegrator``.
         optimizer_params : dict
             Forwarded to ``PathOptimizer``. ``threshold`` controls the
             convergence trigger; see ``docs/convergence.md``.
@@ -214,7 +214,7 @@ class Popcornn:
         self.path.set_potential(potential)
 
         # Path optimization tools
-        integrator = ODEintegrator(**integrator_params, device=self.device, dtype=self.dtype)
+        integrator = PathIntegrator(**integrator_params, device=self.device, dtype=self.dtype)
 
         # Gradient descent path optimizer
         optimizer = PathOptimizer(path=self.path, **optimizer_params, device=self.device, dtype=self.dtype)

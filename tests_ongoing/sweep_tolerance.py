@@ -36,7 +36,7 @@ from statistics import median
 from popcornn import Popcornn
 from popcornn.optimization.path_optimizer import PathOptimizer
 from popcornn.potentials import get_potential
-from popcornn.tools import ODEintegrator, import_run_config
+from popcornn.tools import PathIntegrator, import_run_config
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -62,7 +62,7 @@ B_MIN_STEPS = 200           # never stop before this — early dynamics are nois
 LATE_FRAC = 0.2          # last 20% of any trajectory
 PLATEAU_FRAC_TOL = 0.05  # |L_late - L_pre| / |L_pre| ≤ 5% means plateaued
 
-# Loss measurement inherits the gradient (rtol, atol) — see ODEintegrator
+# Loss measurement inherits the gradient (rtol, atol) — see PathIntegrator
 # defaults at popcornn/tools/integrator.py:48. At observed L ~ O(100), even
 # rtol=1e-1 leaves enough SNR to read off a 2× drop, so paying for tight loss
 # quadrature on every cell wastes wall time.
@@ -83,7 +83,7 @@ def run_one(rtol, atol, lr, base_cfg, n_steps, track_loss=True,
     pot = get_potential(images=mep.images, **leg['potential_params'],
                         device=mep.device, dtype=mep.dtype)
     mep.path.set_potential(pot)
-    integ = ODEintegrator(**leg['integrator_params'],
+    integ = PathIntegrator(**leg['integrator_params'],
                           device=mep.device, dtype=mep.dtype)
     optr = PathOptimizer(path=mep.path, **leg['optimizer_params'],
                          device=mep.device, dtype=mep.dtype)

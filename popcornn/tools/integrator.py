@@ -2,20 +2,17 @@ import torch
 
 from torchpathint import path_integral
 
-from .metrics import Metrics, get_loss_fxn
+from .integrand import build_integrand_terms, evaluate_integrand_sum
 
 
-_PATH_INTEGRAL_LOSSES = {None, 'path_integral', 'integral'}
-
-
-class ODEintegrator(Metrics):
+class PathIntegrator:
     """
     Adaptive-quadrature path integrator.
 
-    Wraps ``torchpathint.path_integral`` with the parts of the
-    popcornn API the optimizer uses:
+    Wraps ``torchpathint.path_integral`` with the parts of the popcornn API
+    the optimizer uses:
 
-    - per-iteration ``ode_fxn_scales`` updates so schedulers take effect,
+    - per-iteration ``integrand_scales`` updates so schedulers take effect,
     - direct scatter of ``∂L/∂θ`` into ``path.parameters().grad``
       (no separate ``.backward()`` call),
     - a ``loss`` field on the returned object holding ``‖∫∇L dt‖_∞``
@@ -27,15 +24,13 @@ class ODEintegrator(Metrics):
     def __init__(
             self,
             method='gk21',
-            path_loss_name=None,
-            path_loss_params=None,
-            path_ode_names=None,
-            path_ode_scales=None,
+            path_integrand_names=None,
+            path_integrand_scales=None,
             rtol=1e-6,
             atol=1e-7,
             max_batch=None,
-            path_ode_energy_idx=1,
-            path_ode_force_idx=2,
+            path_integrand_energy_idx=1,
+            path_integrand_force_idx=2,
             track_loss=False,
             loss_rtol=None,
             loss_atol=None,
@@ -47,24 +42,17 @@ class ODEintegrator(Metrics):
         ----------
         method : str, default="gk21"
             torchpathint quadrature rule. ``gk21`` is Gauss–Kronrod 21pt.
-        path_loss_name : {"path_integral", "integral", None}, optional
-            Outer-loss wrapper. Other choices (``EnergyWeight``,
-            ``GrowingString``) reach into ``IntegralOutput`` fields
-            that no longer exist under torchpathint and will raise.
-        path_loss_params : dict, optional
-            Forwarded to the loss wrapper's constructor.
-        path_ode_names : str or list of str, optional
-            Per-point quantity (or list of them) to integrate. Looked
-            up by name on the parent ``Metrics`` class. See
-            ``docs/loss-functions.md``.
-        path_ode_scales : float or list, optional
-            Weighting per term when ``path_ode_names`` is a list.
+        path_integrand_names : str or list of str, optional
+            Per-point integrand (or list of them) to integrate. Looked up
+            by name in ``PATH_INTEGRANDS``. See ``docs/loss-functions.md``.
+        path_integrand_scales : float or list, optional
+            Weighting per term when ``path_integrand_names`` is a list.
         rtol, atol : float
             Adaptive-quadrature tolerances on the gradient integral.
         max_batch : int, optional
             Hard cap on the number of quadrature points evaluated in
             one batch. ``None`` lets torchpathint auto-size.
-        path_ode_energy_idx, path_ode_force_idx : int
+        path_integrand_energy_idx, path_integrand_force_idx : int
             Reserved indices for the ``[loss, E, F]`` concat; unused
             with ``save_energy_force=False`` but kept for API parity.
         track_loss : bool, default=False
@@ -76,18 +64,6 @@ class ODEintegrator(Metrics):
         device : torch.device
         dtype : torch.dtype
         """
-        # save_energy_force=False: gradient pipeline only consumes the scalar
-        # metric component of ode_fxn output, not the [E, F] concat.
-        super().__init__(device, save_energy_force=False)
-
-        if path_loss_name not in _PATH_INTEGRAL_LOSSES:
-            raise NotImplementedError(
-                f"path_loss_name={path_loss_name!r} is not supported under "
-                f"torchpathint yet — only {_PATH_INTEGRAL_LOSSES} are migrated. "
-                "EnergyWeight / GrowingString reach into IntegralOutput fields "
-                "(t_optimal, sum_steps, y0) that no longer exist."
-            )
-
         self.method = method
         self.atol = atol
         self.rtol = rtol
@@ -102,24 +78,36 @@ class ODEintegrator(Metrics):
         self.N_integrals = 0
         self.integral_output = None
 
-        self.path_ode_energy_idx = path_ode_energy_idx
-        self.path_ode_force_idx = path_ode_force_idx
+        self.path_integrand_energy_idx = path_integrand_energy_idx
+        self.path_integrand_force_idx = path_integrand_force_idx
 
-        if path_ode_names is None:
-            self.eval_fxns = None
-            self.eval_fxn_scales = None
-            self.ode_fxn = None
+        if path_integrand_names is None:
+            self._terms = []
         else:
-            self.create_ode_fxn(path_ode_names, path_ode_scales)
+            self._terms = build_integrand_terms(path_integrand_names, path_integrand_scales)
 
-        self.loss_name = path_loss_name
-        self.loss_fxn = get_loss_fxn(path_loss_name, **(path_loss_params or {}))
+        # save_energy_force=False: gradient pipeline only consumes the scalar
+        # integrand component, not the [E, F] concat.
+        self._save_energy_force = False
+
+    def update_integrand_scales(self, **kwargs):
+        """Replace one or more per-term scales. Used by schedulers to ramp
+        terms up/down between iterations."""
+        for name, scale in kwargs.items():
+            for i, term in enumerate(self._terms):
+                if term.name == name:
+                    term.scale = float(scale)
+                    break
+            else:
+                raise KeyError(
+                    f"No integrand named {name!r} in this integrator "
+                    f"(have: {[t.name for t in self._terms]})."
+                )
 
     def integrate_path(
             self,
             path,
-            ode_fxn_scales=None,
-            loss_scales=None,
+            integrand_scales=None,
             t_init=torch.tensor([0.]),
             t_final=torch.tensor([1.]),
         ):
@@ -136,17 +124,14 @@ class ODEintegrator(Metrics):
         ----------
         path : BasePath
             Holds the trainable parameters and potential.
-        ode_fxn_scales : dict, optional
-            Updated values for per-ODE-term scales (from schedulers).
-        loss_scales : dict, optional
-            Updated values for outer-loss parameters.
+        integrand_scales : dict, optional
+            Updated values for per-term scales (from schedulers).
         t_init, t_final : torch.Tensor
             Integration bounds, in [0, 1]. Squeezed to 0-d for
             torchpathint.
         """
-        if ode_fxn_scales:
-            self.update_ode_fxn_scales(**ode_fxn_scales)
-        self.loss_fxn.update_parameters(**(loss_scales or {}))
+        if integrand_scales:
+            self.update_integrand_scales(**integrand_scales)
 
         # torchpathint requires 0-d bounds; popcornn historically passed 1-d.
         t_init_0d = torch.as_tensor(t_init).squeeze()
@@ -156,8 +141,12 @@ class ODEintegrator(Metrics):
         sizes = [p.numel() for p in params]
 
         def f(t_flat):
-            # ode_fxn returns [N, K=1, 1] with save_energy_force=False.
-            l = self.ode_fxn(t_flat.unsqueeze(-1), path)
+            l, _ = evaluate_integrand_sum(
+                self._terms,
+                t_flat.unsqueeze(-1),
+                path,
+                save_energy_force=self._save_energy_force,
+            )
             l_per_t = l.reshape(t_flat.shape[0], -1).sum(dim=-1)  # [N], graph live
             n = l_per_t.shape[0]
             grad_out = torch.eye(n, device=l_per_t.device, dtype=l_per_t.dtype)
@@ -198,7 +187,12 @@ class ODEintegrator(Metrics):
 
         if self.track_loss:
             def fval(t_flat):
-                l = self.ode_fxn(t_flat.unsqueeze(-1), path)
+                l, _ = evaluate_integrand_sum(
+                    self._terms,
+                    t_flat.unsqueeze(-1),
+                    path,
+                    save_energy_force=self._save_energy_force,
+                )
                 return l.reshape(t_flat.shape[0], -1).detach()
             loss_output = path_integral(
                 fval,

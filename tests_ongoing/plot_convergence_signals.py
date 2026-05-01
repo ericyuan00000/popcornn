@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from popcornn import Popcornn
 from popcornn.optimization.path_optimizer import PathOptimizer
 from popcornn.potentials import get_potential
-from popcornn.tools import ODEintegrator, import_run_config
+from popcornn.tools import PathIntegrator, import_run_config
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = os.path.join(REPO_ROOT, 'examples', 'configs', 'muller_brown.yaml')
@@ -43,7 +43,7 @@ def main():
     pot = get_potential(images=mep.images, **leg['potential_params'],
                         device=mep.device, dtype=mep.dtype)
     mep.path.set_potential(pot)
-    integ = ODEintegrator(**leg['integrator_params'],
+    integ = PathIntegrator(**leg['integrator_params'],
                           device=mep.device, dtype=mep.dtype)
     optr = PathOptimizer(path=mep.path, **leg['optimizer_params'],
                          device=mep.device, dtype=mep.dtype)

@@ -14,7 +14,7 @@ final_images, ts_image = mep.optimize_path(
     {
         # leg 1: cheap repulsive geodesic interpolation
         "potential_params": {"potential": "repel"},
-        "integrator_params": {"path_ode_names": "geodesic"},
+        "integrator_params": {"path_integrand_names": "geodesic"},
         "optimizer_params": {"optimizer": {"name": "adam", "lr": 1.0e-1}},
         "num_optimizer_iterations": 1000,
     },
@@ -26,7 +26,7 @@ final_images, ts_image = mep.optimize_path(
             "task_name": "omol",
         },
         "integrator_params": {
-            "path_ode_names": "projected_variational_reaction_energy",
+            "path_integrand_names": "projected_variational_reaction_energy",
             "rtol": 1.0e-2,
             "atol": 1.0e-2,
         },
@@ -66,18 +66,18 @@ optimizer_params:
     eta_min: 1.0e-5
 ```
 
-### `path_ode_schedulers` — per-loss-term weights
+### `path_integrand_schedulers` — per-loss-term weights
 
-Multiplies entries of `path_ode_scales` (in `integrator_params`) by a
+Multiplies entries of `path_integrand_scales` (in `integrator_params`) by a
 schedule. Useful for ramping one term down while another ramps up.
 
 ```yaml
 integrator_params:
-  path_ode_names: ['projected_variational_reaction_energy', 'variable_reaction_energy']
-  path_ode_scales: [1.0, 0.1]
+  path_integrand_names: ['projected_variational_reaction_energy', 'variable_reaction_energy']
+  path_integrand_scales: [1.0, 0.1]
 
 optimizer_params:
-  path_ode_schedulers:
+  path_integrand_schedulers:
     projected_variational_reaction_energy:
       value: 1.0
       name: cosine
@@ -101,12 +101,6 @@ Available scheduler types:
 | --- | --- |
 | `linear` | Linear interpolation from `start_value` to `end_value` over `last_step`. |
 | `cosine` | Cosine-anneal from `start_value` to `end_value` over `last_step`. |
-
-### `path_loss_schedulers` — outer-loss parameters
-
-Same syntax, but targets parameters on the outer `path_loss_name`
-wrapper. Currently only relevant if you've added a custom loss class
-with tunable parameters.
 
 ## Transition-state losses
 
@@ -152,26 +146,24 @@ contains:
 This is a lot of data. Don't enable it for production runs unless
 you're debugging.
 
-## Custom loss / metric functions
+## Custom path integrands
 
-To add a new per-point loss term, edit `popcornn/tools/metrics.py`
-and add a method to the `Metrics` class. The method needs two paths:
-one for declaring required variables, one for actually computing the
-term.
+To add a new per-point loss term, edit `popcornn/tools/integrand.py`,
+write a subclass of `PathIntegrand`, and register it in
+`PATH_INTEGRANDS`:
 
 ```python
-def my_loss(self, get_required_variables=False, **kwargs):
-    if get_required_variables:
-        return ('forces', 'velocities')      # what this loss needs
-    variables = self._parse_input(**kwargs)
+class MyLoss(PathIntegrand):
+    requires = ('forces', 'velocities')   # cache keys this term consumes
 
-    # compute and return [N, 1]
-    out = ...
-    return out, variables
+    def evaluate(self, variables) -> torch.Tensor:
+        # return shape [N, 1]
+        return ...
+
+PATH_INTEGRANDS['my_loss'] = MyLoss
 ```
 
-Then add the method name to `Metrics.all_ode_fxn_names` and you can
-reference it from any config as `path_ode_names: my_loss`.
+Then reference it from any config as `path_integrand_names: my_loss`.
 
 ## Custom path / potential classes
 

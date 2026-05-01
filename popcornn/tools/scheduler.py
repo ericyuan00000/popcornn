@@ -7,7 +7,7 @@ class SchedulerBase:
     Subclasses implement ``_get_closed_form`` to produce a value as a
     function of the current step. The optimizer steps one of these per
     iteration; ``get_value`` returns the current scheduled value (used
-    to multiply ``path_ode_scales``, ``path_loss`` weights, etc.).
+    to multiply ``path_integrand_scales`` etc.).
     """
 
     def __init__(self, value=1.0, current_step=-1):

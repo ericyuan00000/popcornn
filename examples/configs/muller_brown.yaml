@@ -9,7 +9,7 @@ optimization_params:
   - potential_params:
       name: muller_brown
     integrator_params:
-      path_ode_names: projected_variational_reaction_energy
+      path_integrand_names: projected_variational_reaction_energy
       rtol: 1.0e-2
       atol: 1.0e-2
     optimizer_params:

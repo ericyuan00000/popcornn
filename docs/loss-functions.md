@@ -6,21 +6,21 @@ and minimizing the result:
 $$\text{loss}(\theta) = \int_0^1 \ell\big(x(t; \theta)\big) \, \mathrm{d}t$$
 
 The per-point quantity $\ell$ is whatever you put in
-`integrator_params.path_ode_names`. You can pass a single name (the
-common case) or a list of names with `path_ode_scales` weights (for
+`integrator_params.path_integrand_names`. You can pass a single name (the
+common case) or a list of names with `path_integrand_scales` weights (for
 weighted combinations).
 
 ```yaml
 integrator_params:
-  path_ode_names: projected_variational_reaction_energy
+  path_integrand_names: projected_variational_reaction_energy
   rtol: 1.0e-2
   atol: 1.0e-2
 ```
 
 ```yaml
 integrator_params:
-  path_ode_names: ['projected_variational_reaction_energy', 'variable_reaction_energy']
-  path_ode_scales: [1.0, 0.1]
+  path_integrand_names: ['projected_variational_reaction_energy', 'variable_reaction_energy']
+  path_integrand_scales: [1.0, 0.1]
 ```
 
 ## Available terms
