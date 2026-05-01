@@ -148,6 +148,7 @@ PATH_INTEGRANDS: dict[str, type[PathIntegrand]] = {
     'geodesic': Geodesic,
     'projected_variational_reaction_energy': ProjectedVariationalReactionEnergy,
     'projected_variational_reaction_energy_mag': ProjectedVariationalReactionEnergyMag,
+    'pvre_squared': pVRESquared,
     'variable_reaction_energy': VariableReactionEnergy,
     'vre_variational_error': VREVariationalError,
     'E': Energy,
