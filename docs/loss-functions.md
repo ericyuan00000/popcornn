@@ -38,7 +38,7 @@ Drives configurations where the force is **perpendicular** to the
 path direction — the saddle-point condition. **This is the default
 for reaction-path optimization.**
 
-### `projected_variational_reaction_energy_mag`
+### `pvre_mag`
 
 $$\ell = \big\| \mathbf{v}(t) \odot \mathbf{F}(t) \big\|_2$$
 

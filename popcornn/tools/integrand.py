@@ -68,7 +68,7 @@ class pVRE(PathIntegrand):
         return torch.abs(overlap)
 
 
-class ProjectedVariationalReactionEnergyMag(PathIntegrand):
+class pVREMag(PathIntegrand):
     """``‖v ⊙ F‖₂`` — per-component product, then norm."""
 
     requires = ('forces', 'velocities')
@@ -147,7 +147,7 @@ class ForceMagnitude(PathIntegrand):
 PATH_INTEGRANDS: dict[str, type[PathIntegrand]] = {
     'geodesic': Geodesic,
     'pvre': pVRE,
-    'projected_variational_reaction_energy_mag': ProjectedVariationalReactionEnergyMag,
+    'pvre_mag': pVREMag,
     'pvre_squared': pVRESquared,
     'vre': VRE,
     'vre_variational_error': VREVariationalError,
