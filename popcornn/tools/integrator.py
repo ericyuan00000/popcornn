@@ -1,8 +1,30 @@
+from dataclasses import dataclass
+
 import torch
 
 from torchpathint import path_integral
 
 from .integrand import build_integrand_terms, evaluate_integrand_sum
+
+
+@dataclass(frozen=True)
+class SamplesCache:
+    """Per-quadrature-point energy/force samples harvested during integration.
+
+    Shape contract:
+    - ``time``: ``[N*K]``, flattened from ``IntegralOutput.t``'s ``[N, K]``.
+    - ``energies``: ``[N*K, E]`` (typically ``E=1``; potentials may emit a
+      decomposed energy tensor).
+    - ``forces``: ``[N*K, D]`` where ``D`` is the flattened atomic dof.
+
+    The integrator populates this object from the same evaluations that
+    produced the gradient integral, so consuming it for transition-state
+    finding adds zero extra path-forward calls.
+    """
+
+    time: torch.Tensor
+    energies: torch.Tensor
+    forces: torch.Tensor
 
 
 class PathIntegrator:
@@ -18,7 +40,10 @@ class PathIntegrator:
     - a ``loss`` field on the returned object holding ``‖∫∇L dt‖_∞``
       for the convergence check,
     - an optional detached pass that integrates the loss itself for
-      monitoring.
+      monitoring,
+    - an optional ``save_samples`` mode that captures per-quadrature-point
+      ``(t, energies, forces)`` for transition-state finding without any
+      extra path evaluations.
     """
 
     def __init__(
@@ -29,11 +54,10 @@ class PathIntegrator:
             rtol=1e-6,
             atol=1e-7,
             max_batch=None,
-            path_integrand_energy_idx=1,
-            path_integrand_force_idx=2,
             track_loss=False,
             loss_rtol=None,
             loss_atol=None,
+            save_samples=False,
             device=None,
             dtype=None,
         ):
@@ -52,15 +76,21 @@ class PathIntegrator:
         max_batch : int, optional
             Hard cap on the number of quadrature points evaluated in
             one batch. ``None`` lets torchpathint auto-size.
-        path_integrand_energy_idx, path_integrand_force_idx : int
-            Reserved indices for the ``[loss, E, F]`` concat; unused
-            with ``save_energy_force=False`` but kept for API parity.
         track_loss : bool, default=False
             Run a separate detached integral of the loss itself for
             monitoring. Costs an extra pass.
         loss_rtol, loss_atol : float, optional
             Tolerances for the detached loss integral. Default to
             ``rtol``/``atol``.
+        save_samples : bool, default=False
+            If True, capture ``(t, energies, forces)`` at every quadrature
+            point evaluated during ``integrate_path`` and attach a
+            ``SamplesCache`` to the returned ``IntegralOutput.samples``.
+            Energies and forces are forced into resolution via
+            ``evaluate_integrand_sum(also_resolve=('energies', 'forces'))``;
+            since ``BasePath.forward`` calls the potential exactly once
+            per evaluation regardless of which fields are requested, this
+            adds no path-forward calls beyond the existing gradient pass.
         device : torch.device
         dtype : torch.dtype
         """
@@ -73,22 +103,16 @@ class PathIntegrator:
         self.loss_rtol = loss_rtol if loss_rtol is not None else rtol
         self.loss_atol = loss_atol if loss_atol is not None else atol
         self.max_batch = max_batch
+        self.save_samples = save_samples
         self.device = device
         self.dtype = dtype
         self.N_integrals = 0
         self.integral_output = None
 
-        self.path_integrand_energy_idx = path_integrand_energy_idx
-        self.path_integrand_force_idx = path_integrand_force_idx
-
         if path_integrand_names is None:
             self._terms = []
         else:
             self._terms = build_integrand_terms(path_integrand_names, path_integrand_scales)
-
-        # save_energy_force=False: gradient pipeline only consumes the scalar
-        # integrand component, not the [E, F] concat.
-        self._save_energy_force = False
 
     def update_integrand_scales(self, **kwargs):
         """Replace one or more per-term scales. Used by schedulers to ramp
@@ -118,7 +142,9 @@ class PathIntegrator:
         gradient ``∫₀¹ ∂L/∂θ dt`` (accumulated, so multiple calls
         between ``optimizer.zero_grad()`` compose). Also returns the
         underlying ``IntegralOutput`` with ``.loss`` set to
-        ``‖∫∇L dt‖_∞`` for the convergence check.
+        ``‖∫∇L dt‖_∞`` for the convergence check, and ``.samples`` set
+        to a ``SamplesCache`` (or ``None``) holding per-quadrature-point
+        energies/forces when ``save_samples=True``.
 
         Parameters
         ----------
@@ -140,13 +166,27 @@ class PathIntegrator:
         params = list(path.parameters())
         sizes = [p.numel() for p in params]
 
+        # Side-buffer for transition-state-finding samples. Each entry is a
+        # ``(t_chunk, E_chunk, F_chunk)`` triplet captured inside ``f`` and
+        # later reassembled in IntegralOutput.t.flatten() order via byte-keyed
+        # lookup (the same t tensor is passed to f and indexed into accepted_t
+        # by torchpathint, so byte equality holds).
+        sample_buffer: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
+        also_resolve = ('energies', 'forces') if self.save_samples else ()
+
         def f(t_flat):
-            l, _ = evaluate_integrand_sum(
+            l, variables = evaluate_integrand_sum(
                 self._terms,
                 t_flat.unsqueeze(-1),
                 path,
-                save_energy_force=self._save_energy_force,
+                also_resolve=also_resolve,
             )
+            if self.save_samples:
+                sample_buffer.append((
+                    t_flat.detach().cpu(),
+                    variables['energies'].detach().cpu(),
+                    variables['forces'].detach().cpu(),
+                ))
             l_per_t = l.reshape(t_flat.shape[0], -1).sum(dim=-1)  # [N], graph live
             n = l_per_t.shape[0]
             grad_out = torch.eye(n, device=l_per_t.device, dtype=l_per_t.dtype)
@@ -185,13 +225,17 @@ class PathIntegrator:
         # with √D and forces the threshold to be retuned per parameter count.
         integral_output.loss = flat.abs().max()
 
+        if self.save_samples:
+            integral_output.samples = self._stitch_samples(sample_buffer, integral_output.t)
+        else:
+            integral_output.samples = None
+
         if self.track_loss:
             def fval(t_flat):
                 l, _ = evaluate_integrand_sum(
                     self._terms,
                     t_flat.unsqueeze(-1),
                     path,
-                    save_energy_force=self._save_energy_force,
                 )
                 return l.reshape(t_flat.shape[0], -1).detach()
             loss_output = path_integral(
@@ -210,3 +254,41 @@ class PathIntegrator:
         self.integral_output = integral_output
         self.N_integrals += 1
         return integral_output
+
+    def _stitch_samples(self, sample_buffer, accepted_t):
+        """Reassemble per-call (t, E, F) buffer entries into a flat
+        ``SamplesCache`` aligned with ``accepted_t.flatten()``.
+
+        torchpathint passes the same ``t_eval_pending`` tensor to ``f``
+        and indexes it into ``accepted_t_eval``, so the float bytes of
+        an accepted-point t are byte-identical to one of the rows we
+        captured. Refinement iterations may leave rejected-interval
+        points in the buffer; the byte-keyed lookup just skips them.
+        """
+        lookup: dict[bytes, tuple[torch.Tensor, torch.Tensor]] = {}
+        for t_chunk, e_chunk, f_chunk in sample_buffer:
+            t_np = t_chunk.numpy()
+            for i in range(t_np.shape[0]):
+                lookup[t_np[i].tobytes()] = (e_chunk[i], f_chunk[i])
+
+        flat_t = accepted_t.detach().cpu().flatten()
+        es: list[torch.Tensor] = []
+        fs: list[torch.Tensor] = []
+        flat_t_np = flat_t.numpy()
+        for i in range(flat_t.shape[0]):
+            key = flat_t_np[i].tobytes()
+            entry = lookup.get(key)
+            if entry is None:
+                raise RuntimeError(
+                    "save_samples: accepted t has no matching captured "
+                    "evaluation. The byte-identity invariant between "
+                    "torchpathint's t_eval_pending and accepted_t was "
+                    "violated; check whether the integrator was modified."
+                )
+            es.append(entry[0])
+            fs.append(entry[1])
+
+        time = flat_t.to(self.device)
+        energies = torch.stack(es, dim=0).to(self.device)
+        forces = torch.stack(fs, dim=0).to(self.device)
+        return SamplesCache(time=time, energies=energies, forces=forces)
