@@ -122,7 +122,7 @@ class EnergyMean(PathIntegrand):
         return torch.mean(variables['energies'], dim=-1, keepdim=True)
 
 
-class VREVariationalError(PathIntegrand):
+class VREError(PathIntegrand):
     """``VRE - pVRE``. Force-velocity angular mismatch; → 0 on a true MEP."""
 
     requires = ('forces', 'velocities')
@@ -150,7 +150,7 @@ PATH_INTEGRANDS: dict[str, type[PathIntegrand]] = {
     'pvre_mag': pVREMag,
     'pvre_squared': pVRESquared,
     'vre': VRE,
-    'vre_variational_error': VREVariationalError,
+    'vre_error': VREError,
     'E': Energy,
     'E_mean': EnergyMean,
     'F_mag': ForceMagnitude,

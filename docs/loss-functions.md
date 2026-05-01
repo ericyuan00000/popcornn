@@ -53,7 +53,7 @@ A magnitude-only product. Used in combination with pVRE so that the
 difference $\ell_{\text{VRE}} - \ell_{\text{pVRE}}$ is a soft penalty
 on the angle between force and velocity (zero when they're parallel).
 
-### `vre_variational_error`
+### `vre_error`
 
 $$\ell = \ell_{\text{VRE}} - \ell_{\text{pVRE}}$$
 

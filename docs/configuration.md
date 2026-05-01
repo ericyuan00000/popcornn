@@ -70,7 +70,7 @@ and `task_name`; MACE needs a checkpoint path). The
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `path_integrand_names` | `str` or list of str | `None` | Per-point quantity (or list of them) integrated along the path. Options: `geodesic`, `pvre`, `vre`, `vre_variational_error`, `pvre_mag`, `E`, `E_mean`, `F_mag`. See [Loss functions](loss-functions.md) for what each one means. |
+| `path_integrand_names` | `str` or list of str | `None` | Per-point quantity (or list of them) integrated along the path. Options: `geodesic`, `pvre`, `vre`, `vre_error`, `pvre_mag`, `E`, `E_mean`, `F_mag`. See [Loss functions](loss-functions.md) for what each one means. |
 | `path_integrand_scales` | float or list | `1.0` | Per-term weighting when `path_integrand_names` is a list. |
 | `method` | `str` | `"gk21"` | Adaptive-quadrature rule. `gk21` is Gauss–Kronrod 21-point. |
 | `rtol` | `float` | `1.0e-6` | Relative tolerance for the adaptive integrator. |
