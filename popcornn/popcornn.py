@@ -132,9 +132,7 @@ class Popcornn:
             ``num_record_points`` frames sampled along the optimized path.
         ts_image : ase.Atoms or PathOutput or None
             Predicted transition state as a single frame, or ``None``
-            when the TS-search routine hasn't been wired up (paused under
-            the torchpathint migration; see
-            ``TODO(restore-ts-extraction)`` below).
+            when the optimizer ran with ``find_ts=False``.
         """
         # Optimize the path
         for i, params in enumerate(optimization_params):

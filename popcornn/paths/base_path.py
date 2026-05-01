@@ -83,10 +83,10 @@ class BasePath(torch.nn.Module):
         device : torch.device
         dtype : torch.dtype
         find_ts : bool, default=True
-            Whether the optimization loop should attempt
-            transition-state extraction. Currently a hint only — the
-            extraction routine itself is paused under the torchpathint
-            migration.
+            Whether the optimization loop should run ``ts_search`` each
+            iteration and populate ``ts_time`` / ``ts_energy`` /
+            ``ts_force`` / ``ts_region``. Set False to skip the (cheap)
+            argmax-on-samples step entirely.
         """
         super().__init__()
         self.neval = 0

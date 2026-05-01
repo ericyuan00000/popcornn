@@ -117,14 +117,11 @@ These are useful for, e.g., minimizing the force magnitude at the TS
 a TS-region loss). Each can also be scheduled with
 `ts_time_loss_schedulers` / `ts_region_loss_schedulers`.
 
-> **Currently paused.** TS losses depend on the TS-search routine in
-> `popcornn/paths/base_path.py:ts_search`, which consumed the old
-> torchpathdiffeq Runge–Kutta layout. Under the torchpathint
-> migration, `path.ts_time` stays `None` until the search routine is
-> re-wired, and these losses are no-ops. The hooks are still in
-> `PathOptimizer` so they re-enable for free once the search comes
-> back. Search the source for `TODO(restore-ts-extraction)` for the
-> exact code paths.
+The TS itself is picked by `BasePath.ts_search`: an `argmax` over the
+per-quadrature-point energy cache that the integrator already collects
+during the gradient pass. There is no separate TS optimization — the
+saddle's resolution is set by the integrator's `rtol` / `atol`. Tighten
+those if `ts_image` looks coarse.
 
 ## Logging per-iteration state
 
