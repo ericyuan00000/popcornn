@@ -45,10 +45,20 @@ The recipe:
 | UMA-driven `rxn0003` | ~1.5 | `1.0e-1` |
 | Müller–Brown | ~10 | `1.0` |
 
-The shipped `examples/configs/wolfe.yaml` and `muller_brown.yaml` use
-`threshold: 1.0`; `rxn0003.yaml` uses `threshold: 1.0e-1`. These are
-calibrated to their respective gradient scales, not chosen by
-guessing.
+The shipped `examples/configs/wolfe.yaml` uses `threshold: 1.0`;
+`rxn0003.yaml` uses `threshold: 1.0e-1`. `muller_brown.yaml` ships a
+two-stage `pvre_squared → pvre` schedule (see [Advanced](advanced.md)
+for the pattern) with thresholds `1.0e+3` for the warm-up stage
+(initial $g_\infty \approx 3.6\!\times\!10^4$) and `1.0` for the
+fine-tune stage (initial $g_\infty \approx 5$ once warm-started).
+These are calibrated to their respective gradient scales, not chosen
+by guessing.
+
+The pilot-and-divide recipe applies per stage: each leg gets its own
+threshold from its own initial $g_\infty$. `pvre_squared` gradients are
+roughly $2|v\!\cdot\!F|$ times larger than `pvre` gradients, so a
+`pvre_squared` warm-up stage typically needs a threshold ~10³× larger
+than a `pvre` fine-tune stage on the same system.
 
 ## How to pick `patience`
 

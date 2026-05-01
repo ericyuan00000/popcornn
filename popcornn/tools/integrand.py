@@ -55,7 +55,14 @@ class VRE(PathIntegrand):
 
 
 class pVRE(PathIntegrand):
-    """``|v · F|``. Drives F⟂path (saddle condition); default TS-search loss."""
+    """``|v · F|``. Drives F⟂path (saddle condition); default TS-search loss.
+
+    The sign-driven gradient keeps pushing as the path converges, so this
+    snaps onto the saddle ridge precisely — but its kink at v·F=0 makes the
+    integrand expensive to quadrature. Pair with ``pVRESquared`` as a
+    warm-up stage when integration cost matters; see
+    ``examples/configs/muller_brown.yaml``.
+    """
 
     requires = ('forces', 'velocities')
 

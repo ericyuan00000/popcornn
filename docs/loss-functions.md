@@ -52,10 +52,13 @@ to refine indefinitely around each crossing, which is the dominant
 cost of an iteration. Squaring removes the kink and gk21 typically
 converges in one pass.
 
-A drop-in replacement for `pvre` when integration cost is the
-bottleneck. Loss magnitudes differ (quadratic vs. linear in
-$\mathbf{v}\cdot\mathbf{F}$), so `loss_scale` may need a small
-adjustment.
+In practice `pvre_squared`'s gradient $\propto 2(\mathbf{v}\!\cdot\!\mathbf{F})$
+vanishes near the saddle ridge, so it drives the path most of the way
+to the MEP cheaply but plateaus before pinpointing the TS. Pair it with
+`pvre` as a second leg for a smooth-then-sharp schedule —
+`examples/configs/muller_brown.yaml` ships this pattern and is ~3.5×
+faster than single-leg `pvre`. See [Advanced](advanced.md) for the
+multi-leg recipe.
 
 ### `pvre_mag`
 
@@ -115,14 +118,14 @@ For a typical reaction:
 | What you want | Loss |
 | --- | --- |
 | Resolve atom clashes (pre-step) | `geodesic` with `potential_params.name: repel` |
-| Find the minimum-energy path | `pvre` (or `pvre_squared` for cheaper quadrature) |
+| Find the minimum-energy path | `pvre`, or a `pvre_squared → pvre` schedule for ~3.5× speedup (see `examples/configs/muller_brown.yaml`) |
 | Find the path *and* keep it short | combine pVRE + VRE with scales (see `examples/configs/loss_example.yaml`) |
 | Maximize the TS energy | apply `E_mean` as a TS-region loss (see [Advanced](advanced.md)) |
 | Minimize the TS force magnitude | apply `F_mag` as a TS-time loss |
 
-If you're not sure, start with pVRE alone. It's the
-recommended default and is what every example except `loss_example`
-uses.
+If you're not sure, start with pVRE — alone, or as the second stage
+of a `pvre_squared → pvre` schedule when integration cost matters.
+It's the recommended default for the saddle-finding step.
 
 ## Combining terms with schedulers
 
