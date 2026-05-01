@@ -81,6 +81,29 @@ class ProjectedVariationalReactionEnergyMag(PathIntegrand):
         )
 
 
+class pVRESquared(PathIntegrand):
+    """``(v · F)²`` — smooth pVRE; C^∞ gradient for cleaner adaptive quadrature.
+
+    Same saddle-condition physics as ``ProjectedVariationalReactionEnergy``
+    (zero iff ``v ⊥ F``), but no kink at the zero crossings — ``|s|`` makes
+    ``∂L/∂θ ∝ sign(s)`` jump in t at every crossing, while ``s²`` keeps
+    ``∂L/∂θ ∝ s`` smooth there. The integrator quadratures ``∂L/∂θ`` along
+    the path, so removing those jumps lets adaptive Gauss–Kronrod hit its
+    design convergence rate instead of refining indefinitely around the
+    discontinuities.
+    """
+
+    requires = ('forces', 'velocities')
+
+    def evaluate(self, variables):
+        overlap = torch.sum(
+            variables['velocities'] * variables['forces'],
+            dim=-1,
+            keepdim=True,
+        )
+        return overlap ** 2
+
+
 class Energy(PathIntegrand):
     """Raw potential energy."""
 
