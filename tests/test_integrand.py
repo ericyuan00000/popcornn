@@ -95,6 +95,21 @@ def test_also_resolve_returns_requested_fields():
     assert torch.equal(variables['energies'], energies)
 
 
+def test_pvre_squared_equals_pvre_squared():
+    """``pvre_squared`` integrand value is the elementwise square of
+    ``pvre``. This is the defining property of the smooth variant."""
+    T = 100
+    N_atoms = 17
+    torch.manual_seed(3)
+    velocities = torch.randn(T, N_atoms * 3, dtype=torch.float64)
+    forces = torch.randn(T, N_atoms * 3, dtype=torch.float64)
+    cache = {'velocities': velocities, 'forces': forces}
+    pvre = PATH_INTEGRANDS['pvre']().evaluate(cache)
+    pvre_sq = PATH_INTEGRANDS['pvre_squared']().evaluate(cache)
+    assert torch.allclose(pvre_sq, pvre ** 2)
+    assert (pvre_sq >= 0).all()
+
+
 def test_unknown_name_raises():
     try:
         build_integrand_terms(['not_a_real_integrand'])

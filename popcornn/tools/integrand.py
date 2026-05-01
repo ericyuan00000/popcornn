@@ -1,6 +1,6 @@
 """Path integrand classes and helpers.
 
-One ``PathIntegrand`` ABC plus eight concrete subclasses that each compute a
+One ``PathIntegrand`` ABC plus nine concrete subclasses that each compute a
 per-time integrand value from a dict of cached path quantities. Free
 functions own variable resolution (``resolve_variables``), term construction
 (``build_integrand_terms``), and the weighted-sum loop
