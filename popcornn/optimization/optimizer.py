@@ -3,6 +3,7 @@ import torch
 from torch import optim
 from torch.optim import lr_scheduler
 from torch.nn.functional import interpolate
+from typing import Literal
 from popcornn.tools import scheduler
 from popcornn.tools.scheduler import get_schedulers
 
@@ -33,6 +34,7 @@ class PathOptimizer():
             path,
             optimizer=None,
             find_ts=None,
+            ts_criterion: Literal['energy', 'force', 'combined'] = 'combined',
             lr_scheduler=None,
             path_integrand_schedulers=None,
             ts_time_loss_names=None,
@@ -56,15 +58,19 @@ class PathOptimizer():
             ``{"name": <torch.optim class>, ...kwargs}``. Required.
         find_ts : bool, optional
             Force-enable / force-disable transition-state extraction.
-            ``None`` lets the path's own ``find_ts`` flag decide.
+            ``None`` (default) inherits from the path's own ``find_ts``
+            flag (which itself defaults to ``True``).
+        ts_criterion : {'energy', 'force', 'combined'}, default='combined'
+            Final-pick rule used by ``BasePath.ts_search``. ``'combined'``
+            mirrors the original popcornn behavior (top-K E filter, then
+            argmin |F|); the other two pick by pure max-E or pure
+            min-|F|.
         lr_scheduler : dict, optional
             ``{"name": <torch.optim.lr_scheduler class>, ...kwargs}``.
         path_integrand_schedulers : dict, optional
             Schedules for per-integrand-term scales.
         ts_time_loss_names, ts_time_loss_scales, ts_time_loss_schedulers : optional
-            Loss applied at the predicted TS time. Currently a no-op
-            because TS extraction is paused (see
-            ``TODO(restore-ts-extraction)`` in ``popcornn.py``).
+            Loss applied at the predicted TS time.
         ts_region_loss_names, ts_region_loss_scales, ts_region_loss_schedulers : optional
             Loss applied across a small window around the predicted TS.
         threshold : float, optional
@@ -79,13 +85,14 @@ class PathOptimizer():
         super().__init__()
 
         self.find_ts = find_ts
+        self.ts_criterion = ts_criterion
         self.device=device
         self.dtype=dtype
         self.iteration = 0
         self.threshold = threshold
         self.patience = patience
         self._below_threshold_count = 0
-        
+
         ####  Initialize transition state loss information  #####
         self.has_ts_time_loss = ts_time_loss_names is not None
         self.has_ts_region_loss = ts_region_loss_names is not None
@@ -95,6 +102,10 @@ class PathOptimizer():
                 self.find_ts = True
             else:
                 raise ValueError("Cannot have transition state losses and set find_ts=False")
+        elif self.find_ts is None:
+            # No explicit override and no TS-loss to force the issue —
+            # let the path decide. BasePath's own default is True.
+            self.find_ts = path.find_ts
         
         self.ts_time_loss_names = ts_time_loss_names
         self.ts_time_loss_scales = ts_time_loss_scales
@@ -205,11 +216,18 @@ class PathOptimizer():
         # integrate_path scatters dL/dθ into path.parameters().grad directly;
         # no .backward() call here.
 
-
         #####  Transition State  #####
-        # ts_search consumes the integrator's quadrature points and assumes
-        # the old torchpathdiffeq RK layout. Skipped under the torchpathint
-        # migration; revisit once the quadrature-output adaptor lands.
+        # ts_search reads the per-quadrature-point (t, E, F) cache that the
+        # integrator collected during the same forward pass that produced
+        # the gradient — zero extra path evaluations. evaluate_ts=False here
+        # because the TS-time / TS-region loss block below already
+        # re-evaluates the path at path.ts_time when those losses are on.
+        if self.find_ts and path_integral.samples is not None:
+            path.ts_search(
+                path_integral.samples,
+                evaluate_ts=False,
+                criterion=self.ts_criterion,
+            )
 
         # Evaluate transition state losses
         if self.find_ts and path.ts_time is not None:
