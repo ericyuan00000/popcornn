@@ -6,15 +6,34 @@ initialization_params:
     depth: 4
     activation: gelu
 optimization_params:
+  # Stage 1: pvre_squared warm-up.
+  # The squared integrand is C^infty smooth, so adaptive quadrature
+  # converges in one or two gk21 passes per step (~50 evals/iter vs
+  # ~250 for pvre's abs-form kinks). Drives the path most of the way
+  # to the MEP cheaply, but plateaus before pinpointing the saddle.
+  - potential_params:
+      name: muller_brown
+    integrator_params:
+      path_integrand_names: pvre_squared
+      rtol: 1.0e-1
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-2
+      threshold: 1.0e+3   # initial g_inf ~3.6e4, stop one OOM down
+    num_optimizer_iterations: 100   # converges ~85
+  # Stage 2: pvre fine-tune.
+  # Pvre's |v.F| has constant-magnitude gradient (sign-driven) that
+  # keeps pushing once the path is warm, snapping it onto the saddle
+  # ridge. Smaller lr because the path is already close.
   - potential_params:
       name: muller_brown
     integrator_params:
       path_integrand_names: pvre
       rtol: 1.0e-2
-      atol: 1.0e-2
     optimizer_params:
       optimizer:
         name: adam
-        lr: 1.0e-3
+        lr: 1.0e-4
       threshold: 1.0
-    num_optimizer_iterations: 500
+    num_optimizer_iterations: 100   # converges ~19
