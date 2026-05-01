@@ -16,7 +16,7 @@ integrator_params:
   # path_loss_name: growing_string
   # path_loss_params:
   #     weight_type: inv_gauss
-  path_integrand_names: projected_variational_reaction_energy
+  path_integrand_names: pvre
 optimizer_params:
   optimizer:
     name: adam

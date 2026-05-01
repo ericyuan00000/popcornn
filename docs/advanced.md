@@ -26,7 +26,7 @@ final_images, ts_image = mep.optimize_path(
             "task_name": "omol",
         },
         "integrator_params": {
-            "path_integrand_names": "projected_variational_reaction_energy",
+            "path_integrand_names": "pvre",
             "rtol": 1.0e-2,
             "atol": 1.0e-2,
         },
@@ -73,12 +73,12 @@ schedule. Useful for ramping one term down while another ramps up.
 
 ```yaml
 integrator_params:
-  path_integrand_names: ['projected_variational_reaction_energy', 'variable_reaction_energy']
+  path_integrand_names: ['pvre', 'variable_reaction_energy']
   path_integrand_scales: [1.0, 0.1]
 
 optimizer_params:
   path_integrand_schedulers:
-    projected_variational_reaction_energy:
+    pvre:
       value: 1.0
       name: cosine
       start_value: 1.0
@@ -92,7 +92,7 @@ optimizer_params:
       last_step: 99
 ```
 
-This config ramps the PVRE term from full weight to zero, and VRE from
+This config ramps the pVRE term from full weight to zero, and VRE from
 zero to full weight, over the first 100 iterations.
 
 Available scheduler types:

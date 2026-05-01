@@ -12,14 +12,14 @@ weighted combinations).
 
 ```yaml
 integrator_params:
-  path_integrand_names: projected_variational_reaction_energy
+  path_integrand_names: pvre
   rtol: 1.0e-2
   atol: 1.0e-2
 ```
 
 ```yaml
 integrator_params:
-  path_integrand_names: ['projected_variational_reaction_energy', 'variable_reaction_energy']
+  path_integrand_names: ['pvre', 'variable_reaction_energy']
   path_integrand_scales: [1.0, 0.1]
 ```
 
@@ -30,9 +30,9 @@ velocities $\mathbf{v} = \dot{x}$, energy $E$, forces $\mathbf{F}$ —
 as needed. Popcornn fetches whichever fields are required and reuses
 cached evaluations when it can.
 
-### `projected_variational_reaction_energy` (PVRE)
+### `pvre` (pVRE)
 
-$$\ell_{\text{PVRE}} = \big| \mathbf{v}(t) \cdot \mathbf{F}(t) \big|$$
+$$\ell_{\text{pVRE}} = \big| \mathbf{v}(t) \cdot \mathbf{F}(t) \big|$$
 
 Drives configurations where the force is **perpendicular** to the
 path direction — the saddle-point condition. **This is the default
@@ -43,19 +43,19 @@ for reaction-path optimization.**
 $$\ell = \big\| \mathbf{v}(t) \odot \mathbf{F}(t) \big\|_2$$
 
 Per-component product, then norm. A geometry-aware variant of
-PVRE.
+pVRE.
 
 ### `variable_reaction_energy` (VRE)
 
 $$\ell_{\text{VRE}} = \|\mathbf{F}\|_2 \cdot \|\mathbf{v}\|_2$$
 
-A magnitude-only product. Used in combination with PVRE so that the
-difference $\ell_{\text{VRE}} - \ell_{\text{PVRE}}$ is a soft penalty
+A magnitude-only product. Used in combination with pVRE so that the
+difference $\ell_{\text{VRE}} - \ell_{\text{pVRE}}$ is a soft penalty
 on the angle between force and velocity (zero when they're parallel).
 
 ### `vre_variational_error`
 
-$$\ell = \ell_{\text{VRE}} - \ell_{\text{PVRE}}$$
+$$\ell = \ell_{\text{VRE}} - \ell_{\text{pVRE}}$$
 
 Force-velocity angular mismatch. Approaches zero on a true MEP (where
 forces are tangent to the path).
@@ -96,18 +96,18 @@ For a typical reaction:
 | What you want | Loss |
 | --- | --- |
 | Resolve atom clashes (pre-step) | `geodesic` with `potential_params.name: repel` |
-| Find the minimum-energy path | `projected_variational_reaction_energy` |
-| Find the path *and* keep it short | combine PVRE + VRE with scales (see `examples/configs/loss_example.yaml`) |
+| Find the minimum-energy path | `pvre` |
+| Find the path *and* keep it short | combine pVRE + VRE with scales (see `examples/configs/loss_example.yaml`) |
 | Maximize the TS energy | apply `E_mean` as a TS-region loss (see [Advanced](advanced.md)) |
 | Minimize the TS force magnitude | apply `F_mag` as a TS-time loss |
 
-If you're not sure, start with PVRE alone. It's the
+If you're not sure, start with pVRE alone. It's the
 recommended default and is what every example except `loss_example`
 uses.
 
 ## Combining terms with schedulers
 
 The `loss_example.yaml` config ramps the geodesic-style term down and
-the PVRE term up over the first 100 iterations using cosine
+the pVRE term up over the first 100 iterations using cosine
 schedulers, so the path first untangles itself and then targets the
 TS. See [Advanced](advanced.md) for the syntax.

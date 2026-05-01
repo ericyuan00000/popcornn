@@ -44,7 +44,7 @@ class Geodesic(PathIntegrand):
 
 
 class VariableReactionEnergy(PathIntegrand):
-    """``‖F‖ · ‖v‖`` — magnitudes-only product. Pair with PVRE for angular error."""
+    """``‖F‖ · ‖v‖`` — magnitudes-only product. Pair with pVRE for angular error."""
 
     requires = ('forces', 'velocities')
 
@@ -54,7 +54,7 @@ class VariableReactionEnergy(PathIntegrand):
         return F * V
 
 
-class ProjectedVariationalReactionEnergy(PathIntegrand):
+class pVRE(PathIntegrand):
     """``|v · F|``. Drives F⟂path (saddle condition); default TS-search loss."""
 
     requires = ('forces', 'velocities')
@@ -84,7 +84,7 @@ class ProjectedVariationalReactionEnergyMag(PathIntegrand):
 class pVRESquared(PathIntegrand):
     """``(v · F)²`` — smooth pVRE; C^∞ gradient for cleaner adaptive quadrature.
 
-    Same saddle-condition physics as ``ProjectedVariationalReactionEnergy``
+    Same saddle-condition physics as ``pVRE``
     (zero iff ``v ⊥ F``), but no kink at the zero crossings — ``|s|`` makes
     ``∂L/∂θ ∝ sign(s)`` jump in t at every crossing, while ``s²`` keeps
     ``∂L/∂θ ∝ s`` smooth there. The integrator quadratures ``∂L/∂θ`` along
@@ -123,12 +123,12 @@ class EnergyMean(PathIntegrand):
 
 
 class VREVariationalError(PathIntegrand):
-    """``VRE - PVRE``. Force-velocity angular mismatch; → 0 on a true MEP."""
+    """``VRE - pVRE``. Force-velocity angular mismatch; → 0 on a true MEP."""
 
     requires = ('forces', 'velocities')
 
     def __init__(self):
-        self._pvre = ProjectedVariationalReactionEnergy()
+        self._pvre = pVRE()
         self._vre = VariableReactionEnergy()
 
     def evaluate(self, variables):
@@ -146,7 +146,7 @@ class ForceMagnitude(PathIntegrand):
 
 PATH_INTEGRANDS: dict[str, type[PathIntegrand]] = {
     'geodesic': Geodesic,
-    'projected_variational_reaction_energy': ProjectedVariationalReactionEnergy,
+    'pvre': pVRE,
     'projected_variational_reaction_energy_mag': ProjectedVariationalReactionEnergyMag,
     'pvre_squared': pVRESquared,
     'variable_reaction_energy': VariableReactionEnergy,

@@ -70,7 +70,7 @@ and `task_name`; MACE needs a checkpoint path). The
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `path_integrand_names` | `str` or list of str | `None` | Per-point quantity (or list of them) integrated along the path. Options: `geodesic`, `projected_variational_reaction_energy`, `variable_reaction_energy`, `vre_variational_error`, `projected_variational_reaction_energy_mag`, `E`, `E_mean`, `F_mag`. See [Loss functions](loss-functions.md) for what each one means. |
+| `path_integrand_names` | `str` or list of str | `None` | Per-point quantity (or list of them) integrated along the path. Options: `geodesic`, `pvre`, `variable_reaction_energy`, `vre_variational_error`, `projected_variational_reaction_energy_mag`, `E`, `E_mean`, `F_mag`. See [Loss functions](loss-functions.md) for what each one means. |
 | `path_integrand_scales` | float or list | `1.0` | Per-term weighting when `path_integrand_names` is a list. |
 | `method` | `str` | `"gk21"` | Adaptive-quadrature rule. `gk21` is Gauss–Kronrod 21-point. |
 | `rtol` | `float` | `1.0e-6` | Relative tolerance for the adaptive integrator. |
@@ -88,7 +88,7 @@ and `task_name`; MACE needs a checkpoint path). The
 | `lr_scheduler` | `dict` or `None` | `None` | `{"name": "<torch.optim.lr_scheduler class>", ...kwargs}`. Same convention. |
 | `threshold` | `float` or `None` | `None` | Convergence trigger on `‖∫∇L dt‖_∞`. `None` disables the trigger and always runs the full `num_optimizer_iterations`. See [Convergence](convergence.md) for tuning. |
 | `patience` | `int` | `5` | Number of consecutive iterations the trigger must hold before the leg exits. |
-| `path_integrand_schedulers` | `dict` | `None` | Schedulers on `path_integrand_scales`. Useful for ramping a geodesic term down as a PVRE term ramps up. See [Advanced](advanced.md). |
+| `path_integrand_schedulers` | `dict` | `None` | Schedulers on `path_integrand_scales`. Useful for ramping a geodesic term down as a pVRE term ramps up. See [Advanced](advanced.md). |
 | `find_ts` | `bool` or `None` | `None` (auto) | Force-enable / force-disable transition-state extraction. `None` inherits from the path's own flag (default `True`). When active, `BasePath.ts_search` runs every iteration on the integrator's sample cache and `ts_image` is returned by `optimize_path`. |
 | `ts_time_loss_names`, `ts_time_loss_scales`, `ts_time_loss_schedulers` | various | `None` | Optional losses applied at the predicted transition-state time. See [Advanced](advanced.md). |
 | `ts_region_loss_names`, `ts_region_loss_scales`, `ts_region_loss_schedulers` | various | `None` | Same, but applied across a small time window around the predicted TS. |
@@ -99,7 +99,7 @@ A scheduler entry has the form:
 
 ```yaml
 path_integrand_schedulers:
-  projected_variational_reaction_energy:
+  pvre:
     value: 1.0
     name: cosine          # or 'linear'
     start_value: 1.0
@@ -143,7 +143,7 @@ optimization_params:
       model_name: uma-s-1p1
       task_name: omol
     integrator_params:
-      path_integrand_names: projected_variational_reaction_energy
+      path_integrand_names: pvre
       rtol: 1.0e-2
       atol: 1.0e-2
     optimizer_params:
