@@ -68,8 +68,9 @@ def test_weighted_sum_matches_linear_combination():
             f"weighted sum {name_a} + {name_b} did not match"
 
 
-def test_save_energy_force_concat():
-    """save_energy_force=True appends [energies, forces] columns to the loss."""
+def test_also_resolve_returns_requested_fields():
+    """``also_resolve`` forces extra fields into the resolved variables dict
+    even when no integrand declares them in ``requires``."""
     T = 50
     N_atoms = 5
     torch.manual_seed(2)
@@ -84,11 +85,14 @@ def test_save_energy_force_concat():
         'forces': forces,
     }
 
-    terms = build_integrand_terms(['projected_variational_reaction_energy'])
-    out, _ = evaluate_integrand_sum(
-        terms, time, path=None, save_energy_force=True, cache=cache,
+    # F_mag only declares 'forces'; without also_resolve, energies wouldn't
+    # be required. With it, the resolver still threads them through.
+    terms = build_integrand_terms(['F_mag'])
+    _, variables = evaluate_integrand_sum(
+        terms, time, path=None, cache=cache, also_resolve=('energies',),
     )
-    assert out.shape == (T, 1 + N_atoms + N_atoms * 3)
+    assert variables['energies'] is not None
+    assert torch.equal(variables['energies'], energies)
 
 
 def test_unknown_name_raises():

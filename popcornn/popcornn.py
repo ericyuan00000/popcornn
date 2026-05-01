@@ -132,9 +132,7 @@ class Popcornn:
             ``num_record_points`` frames sampled along the optimized path.
         ts_image : ase.Atoms or PathOutput or None
             Predicted transition state as a single frame, or ``None``
-            when the TS-search routine hasn't been wired up (paused under
-            the torchpathint migration; see
-            ``TODO(restore-ts-extraction)`` below).
+            when the optimizer ran with ``find_ts=False``.
         """
         # Optimize the path
         for i, params in enumerate(optimization_params):
@@ -150,15 +148,10 @@ class Popcornn:
             )
 
         # Evaluate points along the optimized path and return
-        time = torch.linspace(self.path.t_init.item(), self.path.t_final.item(), self.num_record_points, device=self.device)
+        time = torch.linspace(self.path.t_init.item(), self.path.t_final.item(), self.num_record_points, device=self.device, dtype=self.dtype)
         path_output = self.path(time, return_velocities=True, return_energies=True, return_forces=True)
-        # TODO(restore-ts-extraction): TS extraction is None-guarded because
-        # self.path.ts_time stays None unless PathOptimizer.find_ts triggered
-        # the TS-search routine in popcornn/paths/base_path.py. The TS pipeline
-        # is paused under the torchpathint migration (see optimization_step
-        # comment about ts_search consuming the old RK layout). Re-enable —
-        # delete this branch and unconditionally evaluate ts_output — once
-        # find_ts is wired end-to-end again.
+        # ts_time stays None when the optimizer ran with find_ts=False; in
+        # that case there's no predicted TS and ts_output is None.
         if self.path.ts_time is not None:
             ts_time = torch.tensor([self.path.ts_time], device=self.device, dtype=self.dtype)
             ts_output = self.path(ts_time, return_velocities=True, return_energies=True, return_forces=True)
@@ -219,6 +212,10 @@ class Popcornn:
         # Gradient descent path optimizer
         optimizer = PathOptimizer(path=self.path, **optimizer_params, device=self.device, dtype=self.dtype)
 
+        # Sample harvesting is the per-iter input to ts_search; only enable
+        # it when the optimizer is actually going to consume the result.
+        integrator.save_samples = bool(optimizer.find_ts)
+
         # Create output directories
         if output_dir is not None:
             os.makedirs(output_dir, exist_ok=True)
@@ -236,10 +233,26 @@ class Popcornn:
             # Save the path
             if output_dir is not None:
                 time = path_integral.t.flatten()
-                ts_time = torch.tensor([self.path.ts_time], device=self.device, dtype=self.dtype)
                 path_output = self.path(time, return_velocities=True, return_energies=True, return_forces=True)
-                ts_output = self.path(ts_time, return_velocities=True, return_energies=True, return_forces=True)
-                
+                if self.path.ts_time is not None:
+                    ts_time = torch.tensor([self.path.ts_time], device=self.device, dtype=self.dtype)
+                    ts_output = self.path(ts_time, return_velocities=True, return_energies=True, return_forces=True)
+                    ts_record = {
+                        "ts_time": ts_time.tolist(),
+                        "ts_positions": ts_output.positions.tolist(),
+                        "ts_energies": ts_output.energies.tolist(),
+                        "ts_velocities": ts_output.velocities.tolist(),
+                        "ts_forces": ts_output.forces.tolist(),
+                    }
+                else:
+                    ts_record = {
+                        "ts_time": None,
+                        "ts_positions": None,
+                        "ts_energies": None,
+                        "ts_velocities": None,
+                        "ts_forces": None,
+                    }
+
                 record = {
                     "time": time.tolist(),
                     "positions": path_output.positions.tolist(),
@@ -249,11 +262,7 @@ class Popcornn:
                     "loss_evals": path_integral.y.tolist(),
                     "integral": path_integral.integral.item(),
                     "grad_norm": path_integral.loss.item(),
-                    "ts_time": ts_time.tolist(),
-                    "ts_positions": ts_output.positions.tolist(),
-                    "ts_energies": ts_output.energies.tolist(),
-                    "ts_velocities": ts_output.velocities.tolist(),
-                    "ts_forces": ts_output.forces.tolist(),
+                    **ts_record,
                 }
                 loss_integral = getattr(path_integral, 'loss_integral', None)
                 if loss_integral is not None:

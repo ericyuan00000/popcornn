@@ -268,31 +268,30 @@ def evaluate_integrand_sum(
     eval_time,
     path,
     *,
-    save_energy_force=False,
     cache=None,
+    also_resolve=(),
 ):
     """Resolve variables once, then return ``Σ scale_i · integrand_i(variables)``.
+
+    Parameters
+    ----------
+    also_resolve : iterable of str, optional
+        Extra cache keys to force-resolve in addition to those declared
+        by the terms. Used by ``PathIntegrator`` to capture
+        ``('energies', 'forces')`` for transition-state finding even when
+        the active integrand only requires forces.
 
     Returns
     -------
     (loss, variables) : tuple
-        ``loss`` is the weighted sum (with optional ``[E, F]`` post-concat
-        when ``save_energy_force``). ``variables`` is the resolved cache,
-        suitable for re-passing as ``cache=`` on the next call to skip
-        path re-evaluation when ``eval_time`` matches.
+        ``loss`` is the weighted integrand sum. ``variables`` is the
+        resolved cache, suitable for re-passing as ``cache=`` on the next
+        call to skip path re-evaluation when ``eval_time`` matches.
     """
     requires = {r for term in terms for r in term.integrand.requires}
+    requires |= set(also_resolve)
     variables = resolve_variables(eval_time, path, requires, **(cache or {}))
 
     total = sum(term.scale * term.integrand.evaluate(variables) for term in terms)
-
-    if save_energy_force:
-        device = variables['time'].device
-        nans = torch.full(
-            (variables['time'].shape[0], 1), torch.nan, device=device
-        )
-        energies = variables['energies'] if variables['energies'] is not None else nans
-        forces = variables['forces'] if variables['forces'] is not None else nans
-        total = torch.cat([total, energies, forces], dim=-1)
 
     return total, variables
