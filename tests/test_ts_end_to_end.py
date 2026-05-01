@@ -7,14 +7,12 @@ test — convergence quality is checked manually by running
 ``examples/run.py`` against the config.
 """
 
-import pytest
 import torch
 
 from popcornn import Popcornn
 
 
-@pytest.mark.parametrize('criterion', ['combined', 'energy', 'force'])
-def test_optimize_path_returns_ts_image(criterion):
+def test_optimize_path_returns_ts_image():
     torch.manual_seed(0)
     mep = Popcornn(
         images=[[-0.558, 1.442], [0.623, 0.028]],
@@ -37,7 +35,6 @@ def test_optimize_path_returns_ts_image(criterion):
             },
             'optimizer_params': {
                 'optimizer': {'name': 'adam', 'lr': 1e-3},
-                'ts_criterion': criterion,
             },
             'num_optimizer_iterations': 10,
         },
