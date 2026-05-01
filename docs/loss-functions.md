@@ -19,7 +19,7 @@ integrator_params:
 
 ```yaml
 integrator_params:
-  path_integrand_names: ['pvre', 'variable_reaction_energy']
+  path_integrand_names: ['pvre', 'vre']
   path_integrand_scales: [1.0, 0.1]
 ```
 
@@ -45,7 +45,7 @@ $$\ell = \big\| \mathbf{v}(t) \odot \mathbf{F}(t) \big\|_2$$
 Per-component product, then norm. A geometry-aware variant of
 pVRE.
 
-### `variable_reaction_energy` (VRE)
+### `vre` (VRE)
 
 $$\ell_{\text{VRE}} = \|\mathbf{F}\|_2 \cdot \|\mathbf{v}\|_2$$
 

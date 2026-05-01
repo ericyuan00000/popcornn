@@ -13,7 +13,7 @@ optimization_params:
     integrator_params:
       path_integrand_names:
         - pvre
-        - variable_reaction_energy
+        - vre
       path_integrand_scales:
         - 1.0
         - 0.01

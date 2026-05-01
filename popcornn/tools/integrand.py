@@ -43,7 +43,7 @@ class Geodesic(PathIntegrand):
         return torch.linalg.norm(projection, dim=-1, keepdim=True)
 
 
-class VariableReactionEnergy(PathIntegrand):
+class VRE(PathIntegrand):
     """``‖F‖ · ‖v‖`` — magnitudes-only product. Pair with pVRE for angular error."""
 
     requires = ('forces', 'velocities')
@@ -129,7 +129,7 @@ class VREVariationalError(PathIntegrand):
 
     def __init__(self):
         self._pvre = pVRE()
-        self._vre = VariableReactionEnergy()
+        self._vre = VRE()
 
     def evaluate(self, variables):
         return self._vre.evaluate(variables) - self._pvre.evaluate(variables)
@@ -149,7 +149,7 @@ PATH_INTEGRANDS: dict[str, type[PathIntegrand]] = {
     'pvre': pVRE,
     'projected_variational_reaction_energy_mag': ProjectedVariationalReactionEnergyMag,
     'pvre_squared': pVRESquared,
-    'variable_reaction_energy': VariableReactionEnergy,
+    'vre': VRE,
     'vre_variational_error': VREVariationalError,
     'E': Energy,
     'E_mean': EnergyMean,

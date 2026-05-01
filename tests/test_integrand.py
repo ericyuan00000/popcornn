@@ -53,7 +53,7 @@ def test_weighted_sum_matches_linear_combination():
 
     scales = [17.68, 11.45]
     pairs = [
-        ('pvre', 'variable_reaction_energy'),
+        ('pvre', 'vre'),
         ('pvre', 'F_mag'),
         ('E_mean', 'F_mag'),
     ]

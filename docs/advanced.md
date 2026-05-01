@@ -73,7 +73,7 @@ schedule. Useful for ramping one term down while another ramps up.
 
 ```yaml
 integrator_params:
-  path_integrand_names: ['pvre', 'variable_reaction_energy']
+  path_integrand_names: ['pvre', 'vre']
   path_integrand_scales: [1.0, 0.1]
 
 optimizer_params:
@@ -84,7 +84,7 @@ optimizer_params:
       start_value: 1.0
       end_value: 0.0
       last_step: 99
-    variable_reaction_energy:
+    vre:
       value: 1.0
       name: cosine
       start_value: 0.0

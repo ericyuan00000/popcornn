@@ -13,7 +13,7 @@ optimization_params:
     integrator_params:
       path_integrand_names:
         - pvre
-        - variable_reaction_energy
+        - vre
       method : dopri5
       rtol: 1.0e-5
       atol: 1.0e-6
@@ -28,7 +28,7 @@ optimization_params:
             start_value: 1.0
             end_value: 0.0
             last_step: 125
-        variable_reaction_energy:
+        vre:
             value: 1.0
             name: linear
             start_value: 0.0
