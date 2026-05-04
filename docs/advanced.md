@@ -69,14 +69,20 @@ gradient scale (initial $g_\infty / \sim\!30$).
 `examples/configs/lj13.yaml` ships the same schedule on a 39-dim
 atomistic system (13-atom Lennard-Jones cluster, permutation/inversion
 saddle). On this system the two-stage benefit shows up in path
-geometry rather than wall time: across three seeds, the perpendicular
-force at the saddle $|F_\perp|_\mathrm{TS}$ drops from ~0.22 (single-stage
-`pvre_squared` at 600 iters) to ~0.021 (two-stage 300+300 iters), while
+geometry: across three seeds, the perpendicular force at the saddle
+$|F_\perp|_\mathrm{TS}$ drops from ~0.22 (single-stage `pvre_squared`
+at 600 iters) to ~0.015 (two-stage with threshold-driven exit), while
 the energy barrier is reached by either schedule to within 0.04%. The
 `pvre` fine-tune is what tightens the path geometry; running
 `pvre_squared` longer is no substitute. Learning rates are 10× lower
 than Müller–Brown's because LJ-reduced-units gradients are O(1) rather
-than O(1e4).
+than O(1e4). Stage-1 threshold is set unusually low (`1.0` on an
+initial $g_\infty$ of ~6.2e+2) because pvre_squared on this system
+overshoots the saddle ridge and oscillates rather than converging
+monotonically — see [convergence](convergence.md) for the empirical
+derivation. With those thresholds the example runs in ~128 s on a
+single A100 (4× faster than the no-threshold variant) and ends with
+tighter path geometry than the unbounded run.
 
 ## Schedulers
 
