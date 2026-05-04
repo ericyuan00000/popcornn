@@ -44,6 +44,7 @@ The recipe:
 | Wolfe (2D analytic) | ~20 | `1.0` |
 | UMA-driven `rxn0003` | ~1.5 | `1.0e-1` |
 | Müller–Brown | ~10 | `1.0` |
+| LJ-13 cluster | ~6.2e+2 (stage 1) | `null` — see note below |
 
 The shipped `examples/configs/wolfe.yaml` uses `threshold: 1.0`;
 `rxn0003.yaml` uses `threshold: 1.0e-1`. `muller_brown.yaml` ships a
@@ -53,6 +54,31 @@ for the pattern) with thresholds `1.0e+3` for the warm-up stage
 fine-tune stage (initial $g_\infty \approx 5$ once warm-started).
 These are calibrated to their respective gradient scales, not chosen
 by guessing.
+
+`lj13.yaml` deliberately ships with both stages' `threshold: null`
+because the recipe above breaks on this system in two ways:
+
+- **Stage 1 ($g_\infty$ decays too steeply.)** Stage-1
+  $g_\infty$ drops from ~6.2e+02 to ~58 in the first 5 iters (one OOM
+  in 5 steps), then continues falling for another two OOMs while the
+  loss is still descending. The "iterations 5–20" reading would set
+  `threshold` ~6.0, which fires around step 51 with the loss still
+  ~16% above its eventual floor.
+- **Stage 2 ($g_\infty$ is a poor proxy for path quality.)** Across
+  three seeds, stage-2 $g_\infty$ tightens 5 OOM (from ~1.1e-1 to
+  ~6e-6) while the perpendicular force at the saddle, $|F_\perp|_\mathrm{TS}$,
+  only tightens ~5x (from ~0.11 to ~0.021). Early-stopping on
+  $g_\infty$ alone risks ending with loose path geometry even though
+  the gradient norm has nominally converged. The benefit of stage 2
+  on LJ-13 is the 10x reduction in $|F_\perp|_\mathrm{TS}$ relative to
+  a stage-1-only run; preserving that benefit requires running stage 2
+  to its full iteration budget.
+
+The takeaway: the 1-OOM-below-initial recipe assumes (a) $g_\infty$
+decays at a rate comparable to the loss, and (b) $g_\infty$ correlates
+with the physically-meaningful quality metric. When either assumption
+breaks, fall back to fixed iteration counts and verify quality with a
+path-intrinsic metric such as $|F_\perp|_\mathrm{TS}$.
 
 The pilot-and-divide recipe applies per stage: each leg gets its own
 threshold from its own initial $g_\infty$. `pvre_squared` gradients are
