@@ -11,10 +11,20 @@ Per-iter, per-stage we record:
   loss          ∫ L dt    (track_loss=True)
   g2            ‖∫∇L dt‖_2
   ginf          ‖∫∇L dt‖_∞   (== popcornn's `path_integral.loss`)
-  integral_norm same as g2 — explicit alias
+
+Every `--monitor-every` iters we additionally evaluate the path on the
+record grid and record path-intrinsic quality metrics:
+  barrier       max(E) - E[0] over the path
+  ts_idx        argmax(E) — frame index of the saddle
+  f_inf_ts      ‖F‖_∞ at the saddle frame
+  fperp_inf_ts  ‖F − (F·t̂)t̂‖_∞ at the saddle (the MEP-quality metric)
+
+These let us see when path quality settles, independent of the |g|_∞
+convergence trigger.
 
 Usage:
   python run_lj13_traced.py --config <cfg.yaml> --out <out_dir>
+                            [--seed N] [--monitor-every K]
 
 Output: <out_dir>/trace.json with stage-by-stage arrays + final XYZ.
 """
@@ -24,6 +34,7 @@ import json
 import os
 import time as time_mod
 
+import numpy as np
 from ase import Atoms
 from ase.io import write
 
@@ -34,7 +45,37 @@ from popcornn.tools import PathIntegrator, import_run_config, output_to_atoms
 import torch
 
 
-def run_stage(mep, leg, stage_idx):
+def _quality(mep, time_grid):
+    """Path-intrinsic quality metrics for the current path."""
+    with torch.no_grad():
+        po = mep.path(time_grid, return_velocities=False,
+                      return_energies=True, return_forces=True)
+    e = po.energies.detach().cpu().numpy().reshape(-1)
+    f = po.forces.detach().cpu().numpy()
+    pos = po.positions.detach().cpu().numpy()
+    if pos.ndim == 3:
+        pos = pos.reshape(pos.shape[0], -1)
+    if f.ndim == 3:
+        f = f.reshape(f.shape[0], -1)
+    ts = int(e.argmax())
+    t = np.zeros_like(pos)
+    t[1:-1] = pos[2:] - pos[:-2]
+    t[0] = pos[1] - pos[0]
+    t[-1] = pos[-1] - pos[-2]
+    norms = np.linalg.norm(t, axis=1, keepdims=True)
+    norms = np.where(norms < 1e-12, 1.0, norms)
+    t_hat = t / norms
+    f_along = (f * t_hat).sum(axis=1, keepdims=True) * t_hat
+    f_perp = f - f_along
+    return {
+        'barrier': float(e.max() - e[0]),
+        'ts_idx': ts,
+        'f_inf_ts': float(np.max(np.abs(f[ts]))),
+        'fperp_inf_ts': float(np.max(np.abs(f_perp[ts]))),
+    }
+
+
+def run_stage(mep, leg, stage_idx, time_grid, monitor_every=1):
     """Drive a single optimization leg, return per-iter trace + final state."""
     leg = copy.deepcopy(leg)
     leg['integrator_params']['track_loss'] = True
@@ -52,10 +93,11 @@ def run_stage(mep, leg, stage_idx):
     integrand = leg['integrator_params'].get('path_integrand_names')
     lr = leg['optimizer_params']['optimizer'].get('lr')
     print(f'\n=== stage {stage_idx}: integrand={integrand} lr={lr} '
-          f'iters={n_iter} D={n_params} ===')
-    print(f'{"iter":>6s} {"loss":>11s} {"|g|_2":>11s} {"|g|_inf":>11s}')
+          f'iters={n_iter} D={n_params} monitor_every={monitor_every} ===')
+    print(f'{"iter":>6s} {"loss":>11s} {"|g|_inf":>11s} {"barrier":>9s} {"f_inf_TS":>10s} {"fperp_TS":>10s}')
 
     losses, g2s, ginfs = [], [], []
+    q_iters, barriers, f_inf_ts, fperp_inf_ts = [], [], [], []
     t0 = time_mod.perf_counter()
     converged_at = None
     for step in range(n_iter):
@@ -67,11 +109,22 @@ def run_stage(mep, leg, stage_idx):
         losses.append(loss)
         g2s.append(g2)
         ginfs.append(ginf)
+        sample_q = (step % monitor_every == 0) or (step == n_iter - 1)
+        if sample_q:
+            q = _quality(mep, time_grid)
+            q_iters.append(step)
+            barriers.append(q['barrier'])
+            f_inf_ts.append(q['f_inf_ts'])
+            fperp_inf_ts.append(q['fperp_inf_ts'])
         if step in (0, 5, 10, 25, 50, 75, 100, 150, 200, 250, n_iter - 1) or step % 50 == 0:
-            print(f'{step:>6d} {loss if loss is None else f"{loss:11.4e}":>11s} {g2:>11.4e} {ginf:>11.4e}')
-        if optr.converged and converged_at is None:
+            if sample_q:
+                print(f'{step:>6d} {loss if loss is None else f"{loss:11.4e}":>11s} {ginf:>11.4e} {q["barrier"]:>9.4f} {q["f_inf_ts"]:>10.4e} {q["fperp_inf_ts"]:>10.4e}')
+            else:
+                print(f'{step:>6d} {loss if loss is None else f"{loss:11.4e}":>11s} {ginf:>11.4e}')
+        if optr.converged:
             converged_at = step
-            print(f'  → converged at step {step} (threshold trigger)')
+            print(f'  → converged at step {step} (threshold trigger) — exiting stage')
+            break
     elapsed = time_mod.perf_counter() - t0
     print(f'stage {stage_idx} elapsed: {elapsed:.1f}s ({elapsed / max(1, n_iter) * 1000:.1f} ms/step)')
 
@@ -85,6 +138,10 @@ def run_stage(mep, leg, stage_idx):
         'loss': losses,
         'g2': g2s,
         'ginf': ginfs,
+        'q_iter': q_iters,
+        'barrier': barriers,
+        'f_inf_ts': f_inf_ts,
+        'fperp_inf_ts': fperp_inf_ts,
         'elapsed_s': elapsed,
     }
 
@@ -95,6 +152,8 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--seed', type=int, default=None,
                     help='Override initialization_params.seed in the YAML.')
+    ap.add_argument('--monitor-every', type=int, default=1,
+                    help='Sample path-quality metrics every K iters (default 1).')
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -106,13 +165,14 @@ def main():
         init_params['seed'] = args.seed
     mep = Popcornn(**init_params)
 
-    stages = []
-    for i, leg in enumerate(cfg.get('optimization_params', [])):
-        stages.append(run_stage(mep, leg, i))
-
-    # Save final path
     time_grid = torch.linspace(mep.path.t_init.item(), mep.path.t_final.item(),
                                mep.num_record_points, device=mep.device, dtype=mep.dtype)
+
+    stages = []
+    for i, leg in enumerate(cfg.get('optimization_params', [])):
+        stages.append(run_stage(mep, leg, i, time_grid, args.monitor_every))
+
+    # Save final path
     path_output = mep.path(time_grid, return_velocities=True,
                            return_energies=True, return_forces=True)
     final_xyz = os.path.join(args.out, 'popcornn.xyz')
