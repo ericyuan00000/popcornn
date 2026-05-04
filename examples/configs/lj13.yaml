@@ -1,0 +1,58 @@
+initialization_params:
+  images: examples/configs/lj13.xyz
+  path_params:
+    name: mlp
+    n_embed: 8
+    depth: 4
+    activation: gelu
+  num_record_points: 101
+  device: cuda
+  seed: 0
+optimization_params:
+  # Stage 1: pvre_squared warm-up. Same recipe as muller_brown.yaml.
+  # LJ-13 has |grad E| ~ O(1) (reduced units) vs Muller-Brown's ~O(1e4),
+  # so lr is 10x lower than MB's 1e-2 — applying MB's lr would over-step.
+  # Initial |g|_inf ~6.2e+02; the loss curve has bent over by ~step 75
+  # and stage-1 plateau |g|_inf ~0.2 at step 300.
+  - potential_params:
+      name: lennard_jones
+      epsilon: 1.0
+      sigma: 1.0
+      cutoff: 3.0
+    integrator_params:
+      path_integrand_names: pvre_squared
+      rtol: 1.0e-1
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-3
+      # threshold deliberately null: LJ stage-1 |g|_inf decays steeply
+      # (3 OOM in the first 25 iters) so the standard "1 OOM below
+      # initial" recipe fires too early. See docs/convergence.md.
+      threshold: null
+      find_ts: false   # workaround: integrator save_samples crashes when find_ts=True
+    num_optimizer_iterations: 300
+  # Stage 2: pvre fine-tune. Sign-driven gradient drives the perpendicular
+  # force at the saddle to zero — across 3 seeds, |F_perp|_inf at TS drops
+  # from ~0.22 (single-stage pvre_squared 600 iters) to ~0.02 (this two-
+  # stage schedule). This 10x tightening of path geometry is the main
+  # benefit of the two-stage schedule on LJ-13; the energy barrier itself
+  # is reached by either schedule to within 0.04%.
+  - potential_params:
+      name: lennard_jones
+      epsilon: 1.0
+      sigma: 1.0
+      cutoff: 3.0
+    integrator_params:
+      path_integrand_names: pvre
+      rtol: 1.0e-2
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-5
+      # threshold null: stage-2 |g|_inf is a poor proxy for |F_perp|_TS
+      # quality (|g|_inf drops 5 OOM during stage 2 while |F_perp|_TS only
+      # tightens 10x), so early-stop on |g|_inf risks loose path geometry.
+      threshold: null
+      find_ts: false
+    num_optimizer_iterations: 300
