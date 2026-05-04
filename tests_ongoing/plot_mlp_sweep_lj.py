@@ -33,7 +33,7 @@ CONFIG = os.path.join(REPO_ROOT, 'examples', 'configs', 'lj13.yaml')
 
 RTOL = 1e-5
 ATOL = 1e-7
-LR = 1e-3   # PILOT-PATCH — replace with Job 2 winner before launching Batch C
+LR = 1e-3   # matches stage-1 lr in examples/configs/lj13.yaml
 N_STEPS = 400
 
 GRIDS = {

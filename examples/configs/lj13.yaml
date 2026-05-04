@@ -28,9 +28,9 @@ optimization_params:
       # |g|_inf-only recipe. Pvre_squared on this system overshoots:
       # |F_perp|_TS reaches a minimum around iter 160 then oscillates
       # back up 44x while loss continues to drop. Threshold=1.0 fires
-      # near the minimum and avoids the late instability — across 3
-      # seeds it triggers at iter 84-124 with stage-2 starting from a
-      # path 5x tighter than the unbounded run leaves it. See
+      # at iter 84-124 across 3 seeds — before the late oscillation
+      # disturbs the path geometry, so stage 2 refines a cleaner
+      # warm-up than the unbounded run delivers. See
       # docs/convergence.md for the full derivation.
       threshold: 1.0e+0
       find_ts: false   # workaround: integrator save_samples crashes when find_ts=True

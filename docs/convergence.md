@@ -57,11 +57,12 @@ by guessing.
 
 `lj13.yaml`'s thresholds are calibrated differently because the
 recipe above breaks on this system: stage-1 $g_\infty$ decays 3 OOM
-in the first 25 iters (faster than the loss bends over), and stage-2
-$g_\infty$ overshoots — $|F_\perp|_\mathrm{TS}$ reaches a minimum of
-~0.02 around iter 160 then **oscillates back up 44×** (to ~0.84) over
-the remaining iterations as the optimizer sloshes around in
-pvre_squared's $C^\infty$-flat basin.
+in the first 25 iters (faster than the loss bends over) and stage-1
+path quality is non-monotonic — under pvre_squared,
+$|F_\perp|_\mathrm{TS}$ reaches a minimum of ~0.02 around iter 160
+then **oscillates back up 44×** (to ~0.84) over the remaining
+iterations as the optimizer sloshes around in pvre_squared's
+$C^\infty$-flat basin near the saddle ridge.
 
 The thresholds were derived from a 600+600-iter pilot (saved at
 `tests_ongoing/run_lj13_traced.py`) instrumenting per-iter loss,
