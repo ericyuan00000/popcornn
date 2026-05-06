@@ -34,7 +34,7 @@ optimization_params:
       # docs/convergence.md for the full derivation.
       threshold: 1.0e+0
       find_ts: false   # workaround: integrator save_samples crashes when find_ts=True
-    num_optimizer_iterations: 300
+    num_optimizer_iterations: 200   # safety cap; threshold fires at 84-99 (3-seed range)
   # Stage 2: pvre fine-tune. Sign-driven gradient drives the perpendicular
   # force at the saddle to zero — the headline benefit of the two-stage
   # schedule on LJ-13. Threshold=1e-3 is where |F_perp|_TS settles within
@@ -54,4 +54,4 @@ optimization_params:
         lr: 1.0e-5
       threshold: 1.0e-3
       find_ts: false
-    num_optimizer_iterations: 300
+    num_optimizer_iterations: 200   # safety cap; threshold fires at 95-113 (3-seed range)
