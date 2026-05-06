@@ -1,0 +1,57 @@
+initialization_params:
+  images: examples/configs/lj13.xyz
+  path_params:
+    name: mlp
+    n_embed: 8
+    depth: 6
+    activation: gelu
+  num_record_points: 101
+  device: cuda
+  seed: 0
+optimization_params:
+  # Stage 1: pvre_squared warm-up. Same recipe as muller_brown.yaml.
+  # LJ-13 has |grad E| ~ O(1) (reduced units) vs Muller-Brown's ~O(1e4),
+  # so lr is 10x lower than MB's 1e-2 — applying MB's lr would over-step.
+  - potential_params:
+      name: lennard_jones
+      epsilon: 1.0
+      sigma: 1.0
+      cutoff: 3.0
+    integrator_params:
+      path_integrand_names: pvre_squared
+      rtol: 1.0e-1
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-3
+      # Threshold derived from the per-iter quality trace, not the
+      # |g|_inf-only recipe. Pvre_squared on this system overshoots:
+      # |F_perp|_TS reaches a minimum around iter 160 then oscillates
+      # back up 44x while loss continues to drop. Threshold=1.0 fires
+      # at iter 84-124 across 3 seeds — before the late oscillation
+      # disturbs the path geometry, so stage 2 refines a cleaner
+      # warm-up than the unbounded run delivers. See
+      # docs/convergence.md for the full derivation.
+      threshold: 1.0e+0
+      find_ts: false   # workaround: integrator save_samples crashes when find_ts=True
+    num_optimizer_iterations: 200   # safety cap; threshold fires at 84-99 (3-seed range)
+  # Stage 2: pvre fine-tune. Sign-driven gradient drives the perpendicular
+  # force at the saddle to zero — the headline benefit of the two-stage
+  # schedule on LJ-13. Threshold=1e-3 is where |F_perp|_TS settles within
+  # 1% of its 600-iter asymptote (3-seed validated). lr=1e-5 because the
+  # path is already warm-started from stage 1.
+  - potential_params:
+      name: lennard_jones
+      epsilon: 1.0
+      sigma: 1.0
+      cutoff: 3.0
+    integrator_params:
+      path_integrand_names: pvre
+      rtol: 1.0e-2
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-5
+      threshold: 1.0e-3
+      find_ts: false
+    num_optimizer_iterations: 200   # safety cap; threshold fires at 95-113 (3-seed range)
