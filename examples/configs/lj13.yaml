@@ -3,7 +3,7 @@ initialization_params:
   path_params:
     name: mlp
     n_embed: 8
-    depth: 4
+    depth: 6
     activation: gelu
   num_record_points: 101
   device: cuda

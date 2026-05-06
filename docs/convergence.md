@@ -78,12 +78,24 @@ $g_\infty$, barrier, $|F|_\mathrm{TS}$, and $|F_\perp|_\mathrm{TS}$:
   asymptote. Tighter thresholds (e.g., `1e-4`) waste compute without
   meaningfully improving path geometry.
 
-3-seed validation: with these thresholds the example runs in ~128s
-and reaches $|F_\perp|_\mathrm{TS} \approx 0.015$ — **4× faster and
-30% tighter** than the no-threshold 300+300 baseline (562s,
+3-seed validation: with these thresholds the example runs in ~110s
+and reaches $|F_\perp|_\mathrm{TS} \approx 0.0016$ — **5× faster and
+13× tighter** than the no-threshold 300+300 baseline (562s,
 $|F_\perp|_\mathrm{TS} \approx 0.021$). The improvement comes from
 stopping stage 1 before late oscillation degrades the path, so stage
 2 starts from a cleaner warm-up.
+
+The shipped path network is `n_embed=8, depth=6` (~400k params).
+That choice came out of a 10-config (n_embed × depth) sweep with the
+threshold-driven schedule — see [Advanced](advanced.md) for the
+full result. The headline finding: **depth=4 is on a cliff**. At
+depth=4 the same threshold trigger lands stage 2 in different
+basins across seeds, so $|F_\perp|_\mathrm{TS}$ varies by an order
+of magnitude (e.g. (8,4) seed-range [0.006, 0.031]). Depth=6
+removes that variance — (8,6) sits in [0.0016, 0.0018] across the
+same seeds. Larger MLPs also let stage 2's adaptive quadrature
+finish in fewer evaluations per step (the path is smoother), so
+(8,6) is *faster* than (8,4) despite having 2× the parameters.
 
 The takeaway: when $g_\infty$ doesn't decay monotonically alongside
 the loss, the early-iter "1-OOM-below-initial" reading misses the
