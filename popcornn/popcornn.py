@@ -214,13 +214,15 @@ class Popcornn:
             If True and the input was ASE ``Atoms``, return ``Atoms``
             objects rather than raw ``PathOutput`` tensors.
         metrics_log_path : str, optional
-            If set, treated as a directory; each leg writes one JSONL
-            file ``<metrics_log_path>/opt_{i}.jsonl`` with one scalar
+            Directory; each leg writes one JSONL file
+            ``<metrics_log_path>/opt_{i}.jsonl`` with one scalar
             metrics row per iteration (iter, loss, grad_norm_inf,
-            grad_norm_2, lr, step_s, wall_s, converged). Independent
-            of ``output_dir`` — the existing big per-iter JSON dump
-            (which contains positions/energies/forces) is gated only
-            on ``output_dir``.
+            grad_norm_2, lr, step_s, wall_s, converged). When
+            ``output_dir`` is set on the ``Popcornn`` constructor and
+            this kwarg is left as ``None``, defaults to
+            ``<output_dir>/metrics/`` so any run that already saves
+            the heavy per-iter JSON dump also gets the lightweight
+            scalar log next to it.
 
         Returns
         -------
@@ -230,7 +232,11 @@ class Popcornn:
             Predicted transition state as a single frame, or ``None``
             when the optimizer ran with ``find_ts=False``.
         """
-        # Optimize the path
+        # Optimize the path. When output_dir is set but the caller didn't
+        # specify a metrics path, default to <output_dir>/metrics so the
+        # lightweight scalar log lands next to the heavy per-iter JSONs.
+        if metrics_log_path is None and self.output_dir is not None:
+            metrics_log_path = os.path.join(self.output_dir, 'metrics')
         if metrics_log_path is not None:
             os.makedirs(metrics_log_path, exist_ok=True)
         for i, params in enumerate(optimization_params):
