@@ -208,6 +208,10 @@ class PathIntegrator:
             )
             return torch.cat([g.reshape(n, -1) for g in grads], dim=-1)  # [N, D]
 
+        # full_output=True populates .t and .y on the returned IntegralOutput.
+        # Both are consumed downstream — by _stitch_samples (when save_samples
+        # is on) and by popcornn._optimize's per-iter JSON dump (when
+        # output_dir is set). Without it, those code paths crash on .t=None.
         integral_output = path_integral(
             f,
             t_init_0d,
@@ -216,6 +220,7 @@ class PathIntegrator:
             atol=self.atol,
             rtol=self.rtol,
             max_batch=self.max_batch,
+            full_output=True,
             device=self.device,
             dtype=self.dtype,
         )
