@@ -143,6 +143,34 @@ class pVREHuber(PathIntegrand):
         return torch.where(abs_overlap <= self.delta, quadratic, linear)
 
 
+class pVREPseudoHuber(PathIntegrand):
+    """Pseudo-Huber on ``s = v · F``: ``δ²·(√(1 + (s/δ)²) − 1)``.
+
+    Same δ-controlled interpolation between ``pvre_squared`` and ``pvre``
+    as ``pvre_huber`` (δ → ∞ ⇒ ``½·s²``; δ → 0 ⇒ ``δ·|s|``), but C^∞
+    everywhere — there is no piecewise seam at ``|s|=δ``, just a smooth
+    transition. The integrand ``∂L/∂s = s / √(1 + (s/δ)²)`` is bounded
+    by ``±δ`` and analytic, so adaptive Gauss–Kronrod converges at its
+    design rate without the local subdivision Huber's slope corner at
+    ``|s|=δ`` provokes.
+    """
+
+    requires = ('forces', 'velocities')
+
+    def __init__(self, delta=1.0):
+        if delta <= 0:
+            raise ValueError(f"pvre_pseudo_huber delta must be positive, got {delta}.")
+        self.delta = float(delta)
+
+    def evaluate(self, variables):
+        overlap = torch.sum(
+            variables['velocities'] * variables['forces'],
+            dim=-1,
+            keepdim=True,
+        )
+        return self.delta ** 2 * (torch.sqrt(1.0 + (overlap / self.delta) ** 2) - 1.0)
+
+
 class Energy(PathIntegrand):
     """Raw potential energy."""
 
@@ -189,6 +217,7 @@ PATH_INTEGRANDS: dict[str, type[PathIntegrand]] = {
     'pvre_mag': pVREMag,
     'pvre_squared': pVRESquared,
     'pvre_huber': pVREHuber,
+    'pvre_pseudo_huber': pVREPseudoHuber,
     'vre': VRE,
     'vre_error': VREError,
     'E': Energy,
