@@ -43,6 +43,7 @@ def write_cfg(base, lr, n_embed, depth, dst):
     cfg = copy.deepcopy(base)
     cfg['initialization_params']['path_params']['n_embed'] = n_embed
     cfg['initialization_params']['path_params']['depth'] = depth
+    cfg['initialization_params']['device'] = 'cuda'  # interactive-GPU node
     leg = cfg['optimization_params'][0]
     leg['integrator_params']['path_integrand_kwargs'] = {
         'pvre_huber': {'delta': float(DELTA)},
