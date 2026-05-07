@@ -173,7 +173,7 @@ class IntegrandTerm:
     scale: float
 
 
-def build_integrand_terms(names, scales=None) -> list[IntegrandTerm]:
+def build_integrand_terms(names, scales=None, kwargs=None) -> list[IntegrandTerm]:
     """Look ``names`` up in ``PATH_INTEGRANDS``, instantiate, pair with scales.
 
     Parameters
@@ -182,11 +182,18 @@ def build_integrand_terms(names, scales=None) -> list[IntegrandTerm]:
         Registry keys.
     scales : float, list[float], torch.Tensor, or None
         Per-term weights; defaults to all ones.
+    kwargs : dict[str, dict] or None
+        Per-term constructor kwargs, keyed by name. ``{}`` or ``None`` falls
+        back to a no-arg constructor for every term, which is what every
+        unparameterized integrand wants. Only the integrands that take
+        ``__init__`` arguments (e.g. ``pvre_huber``'s ``delta``) need an
+        entry here; all other names ignore ``kwargs`` even when present.
 
     Raises
     ------
     ValueError
-        On unknown names, duplicate names, or scale-length mismatch.
+        On unknown names, duplicate names, scale-length mismatch, or
+        ``kwargs`` keys that don't appear in ``names``.
     """
     if names is None or (isinstance(names, (list, tuple)) and len(names) == 0):
         raise ValueError("Must supply at least one integrand name.")
@@ -206,6 +213,15 @@ def build_integrand_terms(names, scales=None) -> list[IntegrandTerm]:
             f"number of scales ({len(scales)})."
         )
 
+    if kwargs is None:
+        kwargs = {}
+    stray = set(kwargs) - set(names)
+    if stray:
+        raise ValueError(
+            f"path_integrand_kwargs has keys not in names: {sorted(stray)}; "
+            f"names = {names}."
+        )
+
     seen: set[str] = set()
     terms: list[IntegrandTerm] = []
     for name, scale in zip(names, scales):
@@ -218,7 +234,7 @@ def build_integrand_terms(names, scales=None) -> list[IntegrandTerm]:
         seen.add(name)
         terms.append(IntegrandTerm(
             name=name,
-            integrand=PATH_INTEGRANDS[name](),
+            integrand=PATH_INTEGRANDS[name](**kwargs.get(name, {})),
             scale=float(scale),
         ))
     return terms

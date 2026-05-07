@@ -53,6 +53,7 @@ class PathIntegrator:
             method='gk21',
             path_integrand_names=None,
             path_integrand_scales=None,
+            path_integrand_kwargs=None,
             rtol=1e-6,
             atol=1e-7,
             max_batch=None,
@@ -74,6 +75,11 @@ class PathIntegrator:
             by name in ``PATH_INTEGRANDS``. See ``docs/loss-functions.md``.
         path_integrand_scales : float or list, optional
             Weighting per term when ``path_integrand_names`` is a list.
+        path_integrand_kwargs : dict[str, dict], optional
+            Per-term constructor kwargs, keyed by integrand name. Only
+            parameterized integrands (e.g. ``pvre_huber``'s ``delta``)
+            need an entry; unparameterized terms ignore ``kwargs`` even
+            when present.
         rtol, atol : float
             Adaptive-quadrature tolerances on the gradient integral.
         max_batch : int, optional
@@ -126,7 +132,11 @@ class PathIntegrator:
         if path_integrand_names is None:
             self._terms = []
         else:
-            self._terms = build_integrand_terms(path_integrand_names, path_integrand_scales)
+            self._terms = build_integrand_terms(
+                path_integrand_names,
+                path_integrand_scales,
+                path_integrand_kwargs,
+            )
 
     def update_integrand_scales(self, **kwargs):
         """Replace one or more per-term scales. Used by schedulers to ramp
