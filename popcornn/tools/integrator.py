@@ -60,6 +60,7 @@ class PathIntegrator:
             loss_rtol=None,
             loss_atol=None,
             save_samples=False,
+            full_output=False,
             device=None,
             dtype=None,
         ):
@@ -94,6 +95,15 @@ class PathIntegrator:
             since ``BasePath.forward`` calls the potential exactly once
             per evaluation regardless of which fields are requested, this
             adds no path-forward calls beyond the existing gradient pass.
+            Implies ``full_output=True`` (``_stitch_samples`` needs ``.t``).
+        full_output : bool, default=False
+            Forwarded to ``torchpathint.path_integral``. When True, the
+            returned ``IntegralOutput`` carries the per-interval mesh
+            ``.t`` and per-point evaluations ``.y``; when False those
+            are ``None``. Set this on the integrator from outside when
+            something downstream needs the diagnostic mesh — e.g.
+            popcornn's per-iter JSON dump (``output_dir`` set). The
+            effective value is OR-ed with ``save_samples``.
         device : torch.device
         dtype : torch.dtype
         """
@@ -107,6 +117,7 @@ class PathIntegrator:
         self.loss_atol = loss_atol if loss_atol is not None else atol
         self.max_batch = max_batch
         self.save_samples = save_samples
+        self.full_output = full_output
         self.device = device
         self.dtype = dtype
         self.N_integrals = 0
@@ -208,10 +219,12 @@ class PathIntegrator:
             )
             return torch.cat([g.reshape(n, -1) for g in grads], dim=-1)  # [N, D]
 
-        # full_output=True populates .t and .y on the returned IntegralOutput.
-        # Both are consumed downstream — by _stitch_samples (when save_samples
-        # is on) and by popcornn._optimize's per-iter JSON dump (when
-        # output_dir is set). Without it, those code paths crash on .t=None.
+        # full_output gates whether torchpathint populates .t and .y on the
+        # returned IntegralOutput. Required when something downstream reads
+        # them: _stitch_samples (save_samples=True) or popcornn._optimize's
+        # per-iter JSON dump (caller sets self.full_output=True). Off by
+        # default to avoid the diagnostic-buffer overhead.
+        full_output = self.save_samples or self.full_output
         integral_output = path_integral(
             f,
             t_init_0d,
@@ -220,7 +233,7 @@ class PathIntegrator:
             atol=self.atol,
             rtol=self.rtol,
             max_batch=self.max_batch,
-            full_output=True,
+            full_output=full_output,
             device=self.device,
             dtype=self.dtype,
         )

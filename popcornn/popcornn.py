@@ -335,6 +335,10 @@ class Popcornn:
         # Sample harvesting is the per-iter input to ts_search; only enable
         # it when the optimizer is actually going to consume the result.
         integrator.save_samples = bool(optimizer.find_ts)
+        # The per-iter big JSON dump (gated on output_dir) reads .t and .y
+        # off the returned IntegralOutput; ask torchpathint to populate them.
+        if output_dir is not None:
+            integrator.full_output = True
 
         # Create output directories
         if output_dir is not None:
