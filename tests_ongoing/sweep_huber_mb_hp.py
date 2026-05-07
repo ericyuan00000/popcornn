@@ -26,17 +26,24 @@ import numpy as np
 import yaml
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT_BASE = '/pscratch/sd/e/ericyuan/temp/popcornn_huber/mb_hp'
+OUT_BASE = '/pscratch/sd/e/ericyuan/temp/popcornn_huber/mb_hp_small'
 RUNNER = os.path.join(REPO_ROOT, 'tests_ongoing/run_lj13_traced.py')
 BASE_CFG = os.path.join(REPO_ROOT, 'examples/configs/muller_brown_huber.yaml')
 
 DELTA = 1.0
 N_ITER = 1000
 
-# Round powers of 10 for lr; MLP capacity grid covers under-, at-, and
-# over-parameterized regimes vs the shipped (8,4) baseline.
+# Müller-Brown is a 1D curve in 2D — wildly overparameterized at the
+# shipped (n_embed=8, depth=4) → 610 params. Sweep small MLPs near the
+# 10-param floor to see if reducing capacity removes the post-best
+# overshoot we saw at (16,4) and the larger grids.
+#   (n_embed=1, depth=2):  1 → 2 → 2     =   10 params
+#   (n_embed=2, depth=2):  1 → 4 → 2     =   18 params
+#   (n_embed=4, depth=2):  1 → 8 → 2     =   42 params
+#   (n_embed=1, depth=4):  1 → 2 → 2 → 2 → 2 = 22 params
+#   (n_embed=2, depth=4):  1 → 4 → 4 → 4 → 2 = 70 params
 LRS = [1.0e-2, 1.0e-3, 1.0e-4]
-MLPS = [(8, 4), (16, 4), (16, 6), (32, 6)]
+MLPS = [(1, 2), (2, 2), (4, 2), (1, 4), (2, 4)]
 
 
 def write_cfg(base, lr, n_embed, depth, dst):
