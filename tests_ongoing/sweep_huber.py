@@ -86,7 +86,14 @@ def run_one(cfg_path, seed, out_dir, monitor_every):
 
 
 def summarize(trace):
-    """Pull total iters, wall, and final path quality from a trace.json."""
+    """Pull total iters, wall, and final path quality from a trace.json.
+
+    Surfaces the four signals the user wants visible per run: the loss
+    integral, its L∞ gradient (the convergence trigger), the barrier,
+    and the perpendicular force at the TS (the headline MEP-quality
+    metric). Per-iter arrays stay in the trace.json for plotting; this
+    is the rolled-up sweep view.
+    """
     stages = trace['stages']
     total_iter = sum(
         s['converged_at'] + 1 if s['converged_at'] is not None else s['n_iter']
@@ -94,9 +101,12 @@ def summarize(trace):
     )
     wall_s = sum(s['elapsed_s'] for s in stages)
     last = stages[-1]
+    last_loss = last['loss'][-1] if last['loss'] and last['loss'][-1] is not None else None
     return {
         'total_iter': int(total_iter),
         'wall_s': float(wall_s),
+        'loss_final': float(last_loss) if last_loss is not None else None,
+        'ginf_final': float(last['ginf'][-1]) if last['ginf'] else None,
         'barrier_final': float(last['barrier'][-1]) if last['barrier'] else None,
         'f_inf_ts_final': float(last['f_inf_ts'][-1]) if last['f_inf_ts'] else None,
         'fperp_inf_ts_final': float(last['fperp_inf_ts'][-1]) if last['fperp_inf_ts'] else None,
@@ -148,12 +158,18 @@ def sweep_system(system, seeds):
 def print_summary(system, results):
     print(f'\n=== {system} summary ===', flush=True)
     print(f'{"config":<22s} {"seed":>4s} {"iters":>6s} {"wall_s":>8s} '
-          f'{"barrier":>9s} {"fperp_TS":>11s}')
+          f'{"loss":>11s} {"|g|_inf":>11s} {"barrier":>9s} '
+          f'{"f_TS":>11s} {"fperp_TS":>11s}')
     for r in results:
-        bar = f'{r["barrier_final"]:.4f}' if r['barrier_final'] is not None else '   nan'
-        fp = f'{r["fperp_inf_ts_final"]:.4e}' if r['fperp_inf_ts_final'] is not None else '   nan'
+        def fmt(v, spec):
+            return f'{v:{spec}}' if v is not None else '       nan'
         print(f'{r["config"]:<22s} {r["seed"]:>4d} {r["total_iter"]:>6d} '
-              f'{r["wall_s"]:>8.1f} {bar:>9s} {fp:>11s}')
+              f'{r["wall_s"]:>8.1f} '
+              f'{fmt(r["loss_final"], "11.4e")} '
+              f'{fmt(r["ginf_final"], "11.4e")} '
+              f'{fmt(r["barrier_final"], "9.4f")} '
+              f'{fmt(r["f_inf_ts_final"], "11.4e")} '
+              f'{fmt(r["fperp_inf_ts_final"], "11.4e")}')
 
 
 def main():
