@@ -186,6 +186,73 @@ def test_pvre_huber_continuity_at_seam():
     assert abs(fd_right - delta) < 1e-3
 
 
+def test_pvre_pseudo_huber_matches_manual():
+    """``pvre_pseudo_huber.evaluate`` reproduces ``δ²·(√(1+(s/δ)²) − 1)``."""
+    T = 200
+    N_atoms = 7
+    delta = 0.5
+    torch.manual_seed(40)
+    velocities = torch.randn(T, N_atoms * 3, dtype=torch.float64)
+    forces = torch.randn(T, N_atoms * 3, dtype=torch.float64)
+    cache = {'velocities': velocities, 'forces': forces}
+
+    pseudo = PATH_INTEGRANDS['pvre_pseudo_huber'](delta=delta).evaluate(cache)
+
+    overlap = torch.sum(velocities * forces, dim=-1, keepdim=True)
+    expected = delta ** 2 * (torch.sqrt(1.0 + (overlap / delta) ** 2) - 1.0)
+    assert torch.allclose(pseudo, expected)
+    assert (pseudo >= 0).all()
+
+
+def test_pvre_pseudo_huber_limit_behaviors():
+    """δ → ∞ collapses to ½·pvre_squared; δ → 0 collapses to δ·pvre."""
+    T = 100
+    N_atoms = 11
+    torch.manual_seed(50)
+    velocities = torch.randn(T, N_atoms * 3, dtype=torch.float64)
+    forces = torch.randn(T, N_atoms * 3, dtype=torch.float64)
+    cache = {'velocities': velocities, 'forces': forces}
+
+    pvre_sq = PATH_INTEGRANDS['pvre_squared']().evaluate(cache)
+    pvre = PATH_INTEGRANDS['pvre']().evaluate(cache)
+
+    # δ → ∞: Taylor gives L = s²/2 − s⁴/(8δ²) + …. Pick δ where the
+    # analytic remainder dominates over float64 cancellation in √(1+x)−1.
+    delta_large = 1e2
+    pseudo_large = PATH_INTEGRANDS['pvre_pseudo_huber'](delta=delta_large).evaluate(cache)
+    # Remainder bound: |L − s²/2| ≤ s⁴ / (8 δ²) ≤ 5 · max(s²)² / δ².
+    bound = 5.0 * pvre_sq.max() ** 2 / delta_large ** 2
+    assert (pseudo_large - 0.5 * pvre_sq).abs().max() < bound
+
+    # δ → 0 with all |s| ≫ δ: √(1+(s/δ)²) ≈ |s|/δ, so L ≈ δ·|s| − δ².
+    delta_small = 1e-6
+    pseudo_small = PATH_INTEGRANDS['pvre_pseudo_huber'](delta=delta_small).evaluate(cache)
+    expected = delta_small * pvre - delta_small ** 2
+    assert torch.allclose(pseudo_small, expected, rtol=1e-3, atol=1e-12)
+
+
+def test_pvre_pseudo_huber_is_smooth():
+    """The pseudo-Huber gradient is C^∞ — finite-difference derivatives
+    around |s|=δ agree on both sides, unlike Huber which has a slope corner."""
+    delta = 0.5
+    eps = 1e-6
+    pseudo = PATH_INTEGRANDS['pvre_pseudo_huber'](delta=delta)
+
+    def loss_at(s):
+        v = torch.tensor([[s]], dtype=torch.float64)
+        f = torch.tensor([[1.0]], dtype=torch.float64)
+        return pseudo.evaluate({'velocities': v, 'forces': f}).item()
+
+    # Analytic ∂L/∂s at s=δ is δ / √2.
+    expected_grad = delta / (1.0 + 1.0) ** 0.5
+    fd_left = (loss_at(delta) - loss_at(delta - eps)) / eps
+    fd_right = (loss_at(delta + eps) - loss_at(delta)) / eps
+    assert abs(fd_left - expected_grad) < 1e-3
+    assert abs(fd_right - expected_grad) < 1e-3
+    # Smoothness signature: left and right slopes coincide at the seam.
+    assert abs(fd_left - fd_right) < 1e-5
+
+
 def test_path_integrand_kwargs_reach_constructor():
     """``path_integrand_kwargs`` plumbed through ``build_integrand_terms``
     reaches the integrand constructor, and the term evaluates with the
