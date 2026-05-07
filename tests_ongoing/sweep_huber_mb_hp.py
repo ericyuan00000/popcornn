@@ -80,39 +80,46 @@ def run_one(cfg_path, seed, out_dir):
 def analyze(trace):
     """Return path-quality stats for the run.
 
-    Records best |F_⊥|_TS (and its iter), final value, and the iter at
-    which |F_⊥|_TS first comes within 10% of its best — that's our
-    "effective convergence iter" candidate from which to derive a
-    recommended max-steps and threshold.
+    Primary quality metric is |F|_∞ at the TS frame (total force at the
+    saddle — zero at a true TS). Records the trajectory minimum of
+    |F|_∞@TS and the iter at which |F|_∞@TS first comes within 10% of
+    that minimum — that's the "effective convergence iter" we read the
+    recommended max-steps and threshold off of. |F_⊥|_∞@TS is kept on
+    the side for the MEP-quality view.
     """
-    qiter, fperp, ginf, bar = [], [], [], []
+    qiter, fts, fperp, ginf, bar = [], [], [], [], []
     offset = 0
     for s in trace['stages']:
         # ginf is per-iter; q_iter samples are typically every 5
-        for it, f, b in zip(s['q_iter'], s['fperp_inf_ts'], s['barrier']):
-            qiter.append(offset + it); fperp.append(f); bar.append(b)
+        for it, f_ts, fp, b in zip(s['q_iter'], s['f_inf_ts'],
+                                    s['fperp_inf_ts'], s['barrier']):
+            qiter.append(offset + it)
+            fts.append(f_ts); fperp.append(fp); bar.append(b)
             ginf.append(s['ginf'][it])
         offset += s['n_iter']
-    qiter = np.array(qiter); fperp = np.array(fperp); ginf = np.array(ginf); bar = np.array(bar)
+    qiter = np.array(qiter); fts = np.array(fts); fperp = np.array(fperp)
+    ginf = np.array(ginf); bar = np.array(bar)
 
-    bidx = int(np.argmin(fperp))
-    best_fp = float(fperp[bidx]); best_iter = int(qiter[bidx]); best_ginf = float(ginf[bidx])
+    bidx = int(np.argmin(fts))
+    best_fts = float(fts[bidx]); best_iter = int(qiter[bidx]); best_ginf = float(ginf[bidx])
 
-    # Effective convergence: first sample where fperp ≤ 1.1 * best_fp
-    threshold_band = 1.1 * best_fp
-    conv_idx_arr = np.where(fperp <= threshold_band)[0]
-    conv_idx = int(conv_idx_arr[0]) if len(conv_idx_arr) > 0 else len(fperp) - 1
+    # Effective convergence: first sample where |F|_∞@TS ≤ 1.1 * best
+    threshold_band = 1.1 * best_fts
+    conv_idx_arr = np.where(fts <= threshold_band)[0]
+    conv_idx = int(conv_idx_arr[0]) if len(conv_idx_arr) > 0 else len(fts) - 1
     conv_iter = int(qiter[conv_idx]); conv_ginf = float(ginf[conv_idx])
 
     wall_s = sum(s['elapsed_s'] for s in trace['stages'])
     return {
-        'best_fperp': best_fp,
+        'best_f_inf_ts': best_fts,
         'best_iter': best_iter,
         'best_ginf': best_ginf,
         'best_barrier': float(bar[bidx]),
+        'best_fperp_inf_ts': float(fperp[bidx]),
         'conv_iter': conv_iter,
         'conv_ginf': conv_ginf,
-        'final_fperp': float(fperp[-1]),
+        'final_f_inf_ts': float(fts[-1]),
+        'final_fperp_inf_ts': float(fperp[-1]),
         'final_ginf': float(ginf[-1]),
         'final_barrier': float(bar[-1]),
         'wall_s': float(wall_s),
@@ -150,24 +157,25 @@ def main():
 
 def print_summary(results):
     print(f'\n=== mb_hp summary (δ={DELTA}, threshold=0, n_iter={N_ITER}) ===', flush=True)
-    print(f'{"lr":>6s} {"ne":>3s} {"d":>2s} {"seed":>4s} {"best_fp":>10s} {"@iter":>6s} '
-          f'{"|g|@best":>10s} {"conv_it":>8s} {"|g|@conv":>10s} {"end_fp":>10s} '
-          f'{"barrier":>9s} {"s/iter":>7s}')
-    rs = sorted(results, key=lambda r: r['best_fperp'])
+    print(f'{"lr":>6s} {"ne":>3s} {"d":>2s} {"seed":>4s} '
+          f'{"best_F_TS":>11s} {"@iter":>6s} {"|g|@best":>10s} '
+          f'{"conv_it":>8s} {"|g|@conv":>10s} {"end_F_TS":>11s} '
+          f'{"best_Fp":>11s} {"barrier":>9s} {"s/iter":>7s}')
+    rs = sorted(results, key=lambda r: r['best_f_inf_ts'])
     for r in rs:
         print(f'{r["lr"]:>6.0e} {r["n_embed"]:>3d} {r["depth"]:>2d} {r["seed"]:>4d} '
-              f'{r["best_fperp"]:>10.4e} {r["best_iter"]:>6d} {r["best_ginf"]:>10.4e} '
-              f'{r["conv_iter"]:>8d} {r["conv_ginf"]:>10.4e} {r["final_fperp"]:>10.4e} '
-              f'{r["best_barrier"]:>9.4f} {r["s_per_iter"]:>7.3f}')
+              f'{r["best_f_inf_ts"]:>11.4e} {r["best_iter"]:>6d} {r["best_ginf"]:>10.4e} '
+              f'{r["conv_iter"]:>8d} {r["conv_ginf"]:>10.4e} {r["final_f_inf_ts"]:>11.4e} '
+              f'{r["best_fperp_inf_ts"]:>11.4e} {r["best_barrier"]:>9.4f} {r["s_per_iter"]:>7.3f}')
 
-    # Recommendation derived from the winner.
+    # Recommendation derived from the winner (ranked by |F|_∞@TS).
     if rs:
         w = rs[0]
         print(f'\nRecommended Müller-Brown Huber settings (1-seed):')
         print(f'  delta = {DELTA}')
         print(f'  lr = {w["lr"]:.0e}')
         print(f'  n_embed = {w["n_embed"]}, depth = {w["depth"]}')
-        print(f'  num_optimizer_iterations ≥ {w["conv_iter"]}  (path quality within 10% of best)')
+        print(f'  num_optimizer_iterations ≥ {w["conv_iter"]}  (|F|_∞@TS within 10% of best)')
         print(f'  threshold ~ {w["conv_ginf"]:.2e}  (|g|_inf at the effective convergence iter)')
 
 

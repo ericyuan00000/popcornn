@@ -86,13 +86,13 @@ def run_one(cfg_path, seed, out_dir, monitor_every):
 
 
 def summarize(trace):
-    """Pull total iters, wall, and final path quality from a trace.json.
+    """Pull total iters, wall, and path quality from a trace.json.
 
-    Surfaces the four signals the user wants visible per run: the loss
-    integral, its L∞ gradient (the convergence trigger), the barrier,
-    and the perpendicular force at the TS (the headline MEP-quality
-    metric). Per-iter arrays stay in the trace.json for plotting; this
-    is the rolled-up sweep view.
+    Quality is keyed on |F|_∞@TS (total force at saddle): both the
+    trajectory minimum (`best_f_inf_ts`) and the final value. |F_⊥|@TS
+    kept alongside for the MEP-quality view. Loss + |g|_inf rounded out
+    so the user can see the convergence trigger and integrand value
+    next to the path-quality numbers.
     """
     stages = trace['stages']
     total_iter = sum(
@@ -102,12 +102,27 @@ def summarize(trace):
     wall_s = sum(s['elapsed_s'] for s in stages)
     last = stages[-1]
     last_loss = last['loss'][-1] if last['loss'] and last['loss'][-1] is not None else None
+
+    # Trajectory minimum of |F|_∞@TS across all stages.
+    best_fts = None; best_iter = None; best_fperp_at = None
+    offset = 0
+    for s in stages:
+        for it, f_ts, fp in zip(s['q_iter'], s['f_inf_ts'], s['fperp_inf_ts']):
+            if best_fts is None or f_ts < best_fts:
+                best_fts = float(f_ts)
+                best_iter = int(offset + it)
+                best_fperp_at = float(fp)
+        offset += s['n_iter']
+
     return {
         'total_iter': int(total_iter),
         'wall_s': float(wall_s),
         'loss_final': float(last_loss) if last_loss is not None else None,
         'ginf_final': float(last['ginf'][-1]) if last['ginf'] else None,
         'barrier_final': float(last['barrier'][-1]) if last['barrier'] else None,
+        'best_f_inf_ts': best_fts,
+        'best_iter': best_iter,
+        'best_fperp_inf_ts': best_fperp_at,
         'f_inf_ts_final': float(last['f_inf_ts'][-1]) if last['f_inf_ts'] else None,
         'fperp_inf_ts_final': float(last['fperp_inf_ts'][-1]) if last['fperp_inf_ts'] else None,
         'stage_iters': [
@@ -156,20 +171,25 @@ def sweep_system(system, seeds):
 
 
 def print_summary(system, results):
-    print(f'\n=== {system} summary ===', flush=True)
+    """Print sorted by `best_f_inf_ts` (trajectory min of total |F|@TS)."""
+    print(f'\n=== {system} summary (sorted by best |F|_∞@TS) ===', flush=True)
     print(f'{"config":<22s} {"seed":>4s} {"iters":>6s} {"wall_s":>8s} '
-          f'{"loss":>11s} {"|g|_inf":>11s} {"barrier":>9s} '
-          f'{"f_TS":>11s} {"fperp_TS":>11s}')
-    for r in results:
+          f'{"best_F_TS":>11s} {"@iter":>6s} {"end_F_TS":>11s} '
+          f'{"best_Fp_TS":>11s} {"|g|_inf":>11s} {"barrier":>9s}')
+    rs = sorted(results,
+                key=lambda r: (r['best_f_inf_ts'] if r['best_f_inf_ts'] is not None
+                               else float('inf')))
+    for r in rs:
         def fmt(v, spec):
             return f'{v:{spec}}' if v is not None else '       nan'
+        bi = f'{r["best_iter"]:>6d}' if r['best_iter'] is not None else '   nan'
         print(f'{r["config"]:<22s} {r["seed"]:>4d} {r["total_iter"]:>6d} '
               f'{r["wall_s"]:>8.1f} '
-              f'{fmt(r["loss_final"], "11.4e")} '
-              f'{fmt(r["ginf_final"], "11.4e")} '
-              f'{fmt(r["barrier_final"], "9.4f")} '
+              f'{fmt(r["best_f_inf_ts"], "11.4e")} {bi} '
               f'{fmt(r["f_inf_ts_final"], "11.4e")} '
-              f'{fmt(r["fperp_inf_ts_final"], "11.4e")}')
+              f'{fmt(r["best_fperp_inf_ts"], "11.4e")} '
+              f'{fmt(r["ginf_final"], "11.4e")} '
+              f'{fmt(r["barrier_final"], "9.4f")}')
 
 
 def main():

@@ -71,22 +71,31 @@ def run_one(cfg_path, seed, out_dir):
 
 
 def analyze(out_dir):
+    """Return path-quality stats keyed on |F|_∞@TS (total force at saddle).
+
+    |F_⊥|@TS kept on the side for the MEP-quality view.
+    """
     tr = json.load(open(os.path.join(out_dir, 'trace.json')))
-    qiter, fperp, ginf, bar = [], [], [], []
+    qiter, fts, fperp, ginf, bar = [], [], [], [], []
     offset = 0
     for s in tr['stages']:
-        for it, f, b in zip(s['q_iter'], s['fperp_inf_ts'], s['barrier']):
-            qiter.append(offset + it); fperp.append(f); bar.append(b)
+        for it, f_ts, fp, b in zip(s['q_iter'], s['f_inf_ts'],
+                                    s['fperp_inf_ts'], s['barrier']):
+            qiter.append(offset + it)
+            fts.append(f_ts); fperp.append(fp); bar.append(b)
             ginf.append(s['ginf'][it])
         offset += s['n_iter']
-    qiter = np.array(qiter); fperp = np.array(fperp); ginf = np.array(ginf); bar = np.array(bar)
-    bidx = int(np.argmin(fperp))
+    qiter = np.array(qiter); fts = np.array(fts); fperp = np.array(fperp)
+    ginf = np.array(ginf); bar = np.array(bar)
+    bidx = int(np.argmin(fts))
     return {
-        'best_fperp': float(fperp[bidx]),
+        'best_f_inf_ts': float(fts[bidx]),
         'best_iter': int(qiter[bidx]),
         'best_ginf': float(ginf[bidx]),
         'best_barrier': float(bar[bidx]),
-        'final_fperp': float(fperp[-1]),
+        'best_fperp_inf_ts': float(fperp[bidx]),
+        'final_f_inf_ts': float(fts[-1]),
+        'final_fperp_inf_ts': float(fperp[-1]),
         'final_barrier': float(bar[-1]),
         'wall_s': float(sum(s['elapsed_s'] for s in tr['stages'])),
     }
@@ -124,20 +133,25 @@ def main():
                 with open(os.path.join(OUT_BASE, 'results.json'), 'w') as f:
                     json.dump(results, f, indent=2)
 
-    # Aggregate.
+    # Aggregate. Primary quality metric is |F|_∞@TS (best across the
+    # trajectory); also report |F_⊥|@TS at the same iter for context.
     print(f'\n=== mb_validate aggregate (3 seeds) ===', flush=True)
-    print(f'{"config":<18s} {"best_fp_mean":>13s} {"best_fp_std":>12s} '
-          f'{"best_iter_mean":>15s} {"|g|_mean":>10s} {"wall_mean":>10s}')
+    print(f'{"config":<18s} {"F_TS_mean":>11s} {"F_TS_std":>10s} '
+          f'{"best_iter_mean":>15s} {"|g|@best_mean":>14s} '
+          f'{"wall_mean":>10s} {"Fp_TS_mean":>11s}')
     by_cfg = {}
     for r in results:
         by_cfg.setdefault(r['config'], []).append(r)
-    for cfg, rs in by_cfg.items():
-        bps = np.array([r['best_fperp'] for r in rs])
+    for cfg, rs in sorted(by_cfg.items(),
+                          key=lambda kv: np.mean([r['best_f_inf_ts'] for r in kv[1]])):
+        bts = np.array([r['best_f_inf_ts'] for r in rs])
         bis = np.array([r['best_iter'] for r in rs])
         bgs = np.array([r['best_ginf'] for r in rs])
         ws = np.array([r['wall_s'] for r in rs])
-        print(f'{cfg:<18s} {bps.mean():>13.4e} {bps.std():>12.4e} '
-              f'{bis.mean():>15.1f} {bgs.mean():>10.4e} {ws.mean():>10.1f}')
+        bps = np.array([r['best_fperp_inf_ts'] for r in rs])
+        print(f'{cfg:<18s} {bts.mean():>11.4e} {bts.std():>10.4e} '
+              f'{bis.mean():>15.1f} {bgs.mean():>14.4e} '
+              f'{ws.mean():>10.1f} {bps.mean():>11.4e}')
 
 
 if __name__ == '__main__':
