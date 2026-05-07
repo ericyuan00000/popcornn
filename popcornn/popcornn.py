@@ -17,6 +17,67 @@ from popcornn.tools import PathIntegrator
 from popcornn.potentials import get_potential
 
 
+# Sparse iteration set for the per-leg progress printout. Dense at the
+# start (where most of the descent happens), then every 50 after 250.
+_PRINT_ITERS = (0, 5, 10, 25, 50, 75, 100, 150, 200, 250)
+
+
+def _should_print(it: int, last_it: int) -> bool:
+    return it in _PRINT_ITERS or it == last_it or (it > 250 and it % 50 == 0)
+
+
+class _LegLogger:
+    """Per-leg sparse-table logger + wall-time tracker.
+
+    Streams a header at leg start, sparse per-iter rows via
+    ``tqdm.write`` (so the rows interleave with the iteration bar),
+    a convergence-trigger announcement, and a leg-end summary to
+    stdout.
+    """
+
+    def __init__(self, leg_idx, integrand_terms, lr, threshold,
+                 n_iter, n_params):
+        self.leg_idx = leg_idx
+        self.n_iter = n_iter
+        terms_str = (
+            " + ".join(f"{t.name}×{t.scale:g}" for t in integrand_terms)
+            or "<none>"
+        )
+        thr = "—" if threshold is None else f"{threshold:.1e}"
+        print(
+            f"── leg {leg_idx} ──  integrand: {terms_str}   "
+            f"lr={lr:.1e}   threshold={thr}   "
+            f"n_iter={n_iter}   n_params={n_params}"
+        )
+        print(
+            f"  {'iter':>6s}  {'loss':>12s}  "
+            f"{'|g|_inf':>12s}  {'|g|_2':>12s}  {'step_s':>8s}"
+        )
+        self._t_start = time.perf_counter()
+
+    def row(self, it, loss, g_inf, g_2, step_s):
+        loss_str = "—" if loss is None else f"{loss:12.4e}"
+        tqdm.write(
+            f"  {it:>6d}  {loss_str:>12s}  "
+            f"{g_inf:12.4e}  {g_2:12.4e}  {step_s:8.4f}"
+        )
+
+    def converged(self, it, g_inf, threshold, patience):
+        tqdm.write(
+            f"converged at iter {it}  "
+            f"(|g|_∞={g_inf:.3e} < threshold={threshold:.1e} "
+            f"for patience={patience})"
+        )
+
+    def end(self, iters_done):
+        wall = time.perf_counter() - self._t_start
+        ms_iter = 1000 * wall / max(1, iters_done)
+        print(
+            f"leg {self.leg_idx} done  iters={iters_done}  "
+            f"wall={wall:.1f}s  ms/iter={ms_iter:.1f}"
+        )
+
+
 class Popcornn:
     """
     High-level driver for popcornn reaction-path optimization.
@@ -142,9 +203,10 @@ class Popcornn:
                 output_dir = None
 
             self._optimize(
-                **params, 
+                **params,
                 output_dir=output_dir,
-                output_ase_atoms=output_ase_atoms
+                output_ase_atoms=output_ase_atoms,
+                leg_idx=i,
             )
 
         # Evaluate points along the optimized path and return
@@ -171,7 +233,8 @@ class Popcornn:
             optimizer_params: dict[str, Any] = {},
             num_optimizer_iterations: int = 1000,
             output_dir: str | None = None,
-            output_ase_atoms: bool = True
+            output_ase_atoms: bool = True,
+            leg_idx: int = 0,
     ):
         """
         Run a single optimization leg.
@@ -197,6 +260,9 @@ class Popcornn:
         output_ase_atoms : bool, default=True
             Reserved; kept for parity with ``optimize_path``. Logging
             here always uses tensor form.
+        leg_idx : int, default=0
+            Index of this leg in the parent ``optimize_path`` chain;
+            used only for the stdout progress header.
         """
         # Create output directories
         if output_dir is not None:
@@ -222,13 +288,41 @@ class Popcornn:
             log_dir = os.path.join(output_dir, "logs")
             os.makedirs(log_dir, exist_ok=True)
         
+        # Per-leg progress logger: header now, sparse rows during the loop,
+        # convergence/leg-end summary on exit.
+        logger = _LegLogger(
+            leg_idx=leg_idx,
+            integrand_terms=integrator._terms,
+            lr=optimizer.optimizer.param_groups[0]['lr'],
+            threshold=optimizer.threshold,
+            n_iter=num_optimizer_iterations,
+            n_params=sum(p.numel() for p in self.path.parameters()),
+        )
+
+        last_iter = num_optimizer_iterations - 1
+        iters_done = 0
+
         # Optimize the path
-        for optim_idx in tqdm(range(num_optimizer_iterations)):
+        for optim_idx in tqdm(range(num_optimizer_iterations), leave=False):
+            t_step = time.perf_counter()
             try:
                 integral_output = optimizer.optimization_step(self.path, integrator)
             except ValueError as e:
                 print("ValueError", e)
                 raise e
+            step_s = time.perf_counter() - t_step
+            iters_done = optim_idx + 1
+
+            if _should_print(optim_idx, last_iter):
+                loss_attr = getattr(integral_output, 'loss', None)
+                loss_v = float(loss_attr[0].item()) if loss_attr is not None else None
+                logger.row(
+                    optim_idx,
+                    loss_v,
+                    integral_output.grad_norm.item(),
+                    integral_output.grad_norm_2.item(),
+                    step_s,
+                )
 
             # Save the path
             if output_dir is not None:
@@ -271,8 +365,13 @@ class Popcornn:
 
             # Check for convergence
             if optimizer.converged:
-                print(f"Converged at step {optim_idx}")
+                logger.converged(
+                    optim_idx,
+                    integral_output.grad_norm.item(),
+                    optimizer.threshold,
+                    optimizer.patience,
+                )
                 break
-            
-        
+
+        logger.end(iters_done)
 
