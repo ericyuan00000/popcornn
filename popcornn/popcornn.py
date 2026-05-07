@@ -225,15 +225,15 @@ class Popcornn:
         # Optimize the path
         for optim_idx in tqdm(range(num_optimizer_iterations)):
             try:
-                path_integral = optimizer.optimization_step(self.path, integrator)
+                integral_output = optimizer.optimization_step(self.path, integrator)
             except ValueError as e:
                 print("ValueError", e)
                 raise e
 
             # Save the path
             if output_dir is not None:
-                time = path_integral.t.flatten()
-                path_output = self.path(time, return_velocities=True, return_energies=True, return_forces=True)
+                t_grid = integral_output.t.flatten()
+                path_output = self.path(t_grid, return_velocities=True, return_energies=True, return_forces=True)
                 if self.path.ts_time is not None:
                     ts_time = torch.tensor([self.path.ts_time], device=self.device, dtype=self.dtype)
                     ts_output = self.path(ts_time, return_velocities=True, return_energies=True, return_forces=True)
@@ -254,19 +254,18 @@ class Popcornn:
                     }
 
                 record = {
-                    "time": time.tolist(),
+                    "time": t_grid.tolist(),
                     "positions": path_output.positions.tolist(),
                     "energies": path_output.energies.tolist(),
                     "velocities": path_output.velocities.tolist(),
                     "forces": path_output.forces.tolist(),
-                    "loss_evals": path_integral.y.tolist(),
-                    "integral": path_integral.integral.item(),
-                    "grad_norm": path_integral.loss.item(),
+                    "loss_evals": integral_output.y.tolist(),
+                    "grad_norm": integral_output.grad_norm.item(),
                     **ts_record,
                 }
-                loss_integral = getattr(path_integral, 'loss_integral', None)
-                if loss_integral is not None:
-                    record["loss_integral"] = loss_integral.tolist()
+                loss = getattr(integral_output, 'loss', None)
+                if loss is not None:
+                    record["loss"] = loss.tolist()
                 with open(os.path.join(log_dir, f"output_{optim_idx}.json"), 'w') as file:
                     json.dump(record, file)
 

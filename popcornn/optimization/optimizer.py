@@ -181,8 +181,10 @@ class PathOptimizer():
         Returns
         -------
         IntegralOutput
-            The integrator output, with ``.loss`` overridden to the
-            ``‖∫∇L dt‖_∞`` value used for convergence checks.
+            The integrator output, with ``.grad_norm`` set to the
+            ``‖∫∇L dt‖_∞`` value used for convergence checks. See
+            ``PathIntegrator.integrate_path`` for the full set of
+            popcornn-level fields attached.
         """
         self.optimizer.zero_grad()
         t_init = t_init.to(self.dtype).to(self.device)
@@ -198,7 +200,7 @@ class PathOptimizer():
             ts_region_loss_scales = {
                 name : schd.get_value() for name, schd in self.ts_region_loss_schedulers.items()
             }
-        path_integral = integrator.integrate_path(
+        integral_output = integrator.integrate_path(
             path,
             integrand_scales=integrand_scales,
             t_init=t_init,
@@ -213,9 +215,9 @@ class PathOptimizer():
         # the gradient — zero extra path evaluations. evaluate_ts=False here
         # because the TS-time / TS-region loss block below already
         # re-evaluates the path at path.ts_time when those losses are on.
-        if self.find_ts and path_integral.samples is not None:
+        if self.find_ts and integral_output.samples is not None:
             path.ts_search(
-                path_integral.samples,
+                integral_output.samples,
                 evaluate_ts=False,
             )
 
@@ -253,11 +255,11 @@ class PathOptimizer():
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()
 
-        # Convergence: ‖∫∇L dt‖ below threshold for `patience` consecutive
+        # Convergence: ‖∫∇L dt‖_∞ below threshold for `patience` consecutive
         # iterations. Patience guards against single-step dips driven by
         # adaptive-quadrature error wiggling around the threshold.
         if self.threshold is not None:
-            if path_integral.loss.item() < self.threshold:
+            if integral_output.grad_norm.item() < self.threshold:
                 self._below_threshold_count += 1
                 if self._below_threshold_count >= self.patience:
                     self.converged = True
@@ -266,6 +268,6 @@ class PathOptimizer():
 
         self.iteration = self.iteration + 1
 
-        return path_integral
+        return integral_output
 
     

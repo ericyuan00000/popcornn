@@ -145,4 +145,4 @@ integrator_params:
 
 That runs a separate detached quadrature with looser tolerances
 (`loss_rtol`, `loss_atol`, defaulting to `rtol`/`atol`) so it doesn't
-dominate runtime. The result lands on `path_integral.loss_integral`.
+dominate runtime. The result lands on `integral_output.loss`.

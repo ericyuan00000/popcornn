@@ -198,12 +198,12 @@ contains:
 - `time`, `positions`, `energies`, `velocities`, `forces` — the path
   evaluated at the integrator's quadrature times.
 - `loss_evals` — per-time loss evaluations.
-- `integral` — the scalar integral value.
 - `grad_norm` — the L∞ norm of the path-integrated gradient (the
   convergence signal).
 - `ts_time`, `ts_positions`, `ts_energies`, `ts_velocities`,
   `ts_forces` — the predicted TS at this iteration.
-- `loss_integral` — only present if `track_loss: true`.
+- `loss` — the scalar loss integral $\int \mathcal{L}\,\mathrm{d}t$;
+  only present if `track_loss: true`.
 
 This is a lot of data. Don't enable it for production runs unless
 you're debugging.

@@ -55,8 +55,8 @@ def main():
     for it in range(20):
         out = optr.optimization_step(mep.path, integ)
         if it % 2 == 0 or it == 19:
-            print(f'iter {it:3d}  ||grad||={out.loss.item():.3e}  '
-                  f'L={measure_L():.6e}  rgrad={out.integral.requires_grad}')
+            print(f'iter {it:3d}  ||grad||={out.grad_norm.item():.3e}  '
+                  f'L={measure_L():.6e}  rgrad={out.grad_integral.requires_grad}')
 
 
 if __name__ == '__main__':

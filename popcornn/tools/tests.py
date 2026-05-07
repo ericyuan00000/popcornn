@@ -197,20 +197,20 @@ def scheduler_test(path, config, schedule_fxn, device):
     time = None
     scheduled_evals = []
     for i in range(scheduler_config[fxn2_name]['last_step']):
-        path_integral = optimizer.optimization_step(
+        integral_output = optimizer.optimization_step(
             path, integrator, time=time, update_path=False 
         )
         scheduled_evals.append(
-            torch.flatten(path_integral.y, start_dim=0, end_dim=1)
+            torch.flatten(integral_output.y, start_dim=0, end_dim=1)
         )
         time = torch.concatenate(
-            [path_integral.t[:,0,:], torch.tensor([[1]], device=device)],
+            [integral_output.t[:,0,:], torch.tensor([[1]], device=device)],
             dim=0
         )
     scheduled_evals = torch.stack(scheduled_evals)
     
     # Calculate function values and weight with scheduler
-    time = torch.flatten(path_integral.t, start_dim=0, end_dim=1)
+    time = torch.flatten(integral_output.t, start_dim=0, end_dim=1)
     fxn1_terms = build_integrand_terms([fxn1_name])
     fxn1_val, _ = evaluate_integrand_sum(fxn1_terms, time, path)
     fxn1_scheduled_vals = fxn1_val.unsqueeze(0)*schedule_fxn(

@@ -1,7 +1,7 @@
 """Instrumented Popcornn driver — bypasses broken per-iter JSON logger.
 
 The on-main `popcornn._optimize` writes per-iteration records that
-require `path_integral.t`, but the integrator currently calls
+require `integral_output.t`, but the integrator currently calls
 torchpathint without `full_output=True` so `t=None` and the logger
 crashes. Until the upstream one-line fix lands, this script reproduces
 the equivalent traces from outside the library — same pattern as
@@ -10,7 +10,7 @@ the equivalent traces from outside the library — same pattern as
 Per-iter, per-stage we record:
   loss          ∫ L dt    (track_loss=True)
   g2            ‖∫∇L dt‖_2
-  ginf          ‖∫∇L dt‖_∞   (== popcornn's `path_integral.loss`)
+  ginf          ‖∫∇L dt‖_∞   (== popcornn's `integral_output.grad_norm`)
 
 Every `--monitor-every` iters we additionally evaluate the path on the
 record grid and record path-intrinsic quality metrics:
@@ -102,8 +102,8 @@ def run_stage(mep, leg, stage_idx, time_grid, monitor_every=1):
     converged_at = None
     for step in range(n_iter):
         out = optr.optimization_step(mep.path, integ)
-        flat = out.integral.detach()
-        loss = float(out.loss_integral[0].item()) if hasattr(out, 'loss_integral') and out.loss_integral is not None else None
+        flat = out.grad_integral.detach()
+        loss = float(out.loss[0].item()) if getattr(out, 'loss', None) is not None else None
         g2 = float(flat.norm().item())
         ginf = float(flat.abs().max().item())
         losses.append(loss)
