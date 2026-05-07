@@ -111,6 +111,38 @@ class pVRESquared(PathIntegrand):
         return overlap ** 2
 
 
+class pVREHuber(PathIntegrand):
+    """Huber on ``s = v · F``.
+
+    ``½·s²`` for ``|s| ≤ δ``; ``δ·(|s| − ½·δ)`` otherwise. C¹-smooth at
+    the seam (gradient ``δ·sign(s)`` on the linear arm matches ``s`` on
+    the quadratic side at ``|s|=δ``), so adaptive Gauss–Kronrod doesn't
+    refine indefinitely the way ``pvre``'s ``|s|`` kink forces it to,
+    while the linear arms keep ``∂L/∂θ`` constant-magnitude far from the
+    saddle — unlike ``pvre_squared``, whose ``∂L/∂θ ∝ s`` plateaus once
+    the path is close. Sweeps δ to interpolate one-shot between the two:
+    δ → ∞ recovers ``½·pvre_squared``; δ → 0 recovers ``δ·pvre``.
+    """
+
+    requires = ('forces', 'velocities')
+
+    def __init__(self, delta=1.0):
+        if delta <= 0:
+            raise ValueError(f"pvre_huber delta must be positive, got {delta}.")
+        self.delta = float(delta)
+
+    def evaluate(self, variables):
+        overlap = torch.sum(
+            variables['velocities'] * variables['forces'],
+            dim=-1,
+            keepdim=True,
+        )
+        abs_overlap = overlap.abs()
+        quadratic = 0.5 * overlap ** 2
+        linear = self.delta * (abs_overlap - 0.5 * self.delta)
+        return torch.where(abs_overlap <= self.delta, quadratic, linear)
+
+
 class Energy(PathIntegrand):
     """Raw potential energy."""
 
@@ -156,6 +188,7 @@ PATH_INTEGRANDS: dict[str, type[PathIntegrand]] = {
     'pvre': pVRE,
     'pvre_mag': pVREMag,
     'pvre_squared': pVRESquared,
+    'pvre_huber': pVREHuber,
     'vre': VRE,
     'vre_error': VREError,
     'E': Energy,
