@@ -37,10 +37,12 @@ class PathIntegrator:
     - per-iteration ``integrand_scales`` updates so schedulers take effect,
     - direct scatter of ``∂L/∂θ`` into ``path.parameters().grad``
       (no separate ``.backward()`` call),
-    - a ``loss`` field on the returned object holding ``‖∫∇L dt‖_∞``
-      for the convergence check,
-    - an optional detached pass that integrates the loss itself for
-      monitoring,
+    - a ``grad_integral`` alias on the returned object for the flat
+      ``[D]`` integrated gradient, and ``grad_norm`` / ``grad_norm_2``
+      fields holding ``‖∫∇L dt‖_∞`` (used by the convergence check) and
+      ``‖∫∇L dt‖_2`` (for monitoring),
+    - an optional detached pass that integrates the loss itself, exposed
+      as a ``loss`` field for monitoring,
     - an optional ``save_samples`` mode that captures per-quadrature-point
       ``(t, energies, forces)`` for transition-state finding without any
       extra path evaluations.
@@ -58,6 +60,7 @@ class PathIntegrator:
             loss_rtol=None,
             loss_atol=None,
             save_samples=False,
+            full_output=False,
             device=None,
             dtype=None,
         ):
@@ -77,8 +80,9 @@ class PathIntegrator:
             Hard cap on the number of quadrature points evaluated in
             one batch. ``None`` lets torchpathint auto-size.
         track_loss : bool, default=False
-            Run a separate detached integral of the loss itself for
-            monitoring. Costs an extra pass.
+            Run a separate detached integral of the scalar loss
+            ``∫L(t) dt`` for monitoring. Costs an extra pass; when
+            enabled the result is attached as ``IntegralOutput.loss``.
         loss_rtol, loss_atol : float, optional
             Tolerances for the detached loss integral. Default to
             ``rtol``/``atol``.
@@ -91,6 +95,15 @@ class PathIntegrator:
             since ``BasePath.forward`` calls the potential exactly once
             per evaluation regardless of which fields are requested, this
             adds no path-forward calls beyond the existing gradient pass.
+            Implies ``full_output=True`` (``_stitch_samples`` needs ``.t``).
+        full_output : bool, default=False
+            Forwarded to ``torchpathint.path_integral``. When True, the
+            returned ``IntegralOutput`` carries the per-interval mesh
+            ``.t`` and per-point evaluations ``.y``; when False those
+            are ``None``. Set this on the integrator from outside when
+            something downstream needs the diagnostic mesh — e.g.
+            popcornn's per-iter JSON dump (``output_dir`` set). The
+            effective value is OR-ed with ``save_samples``.
         device : torch.device
         dtype : torch.dtype
         """
@@ -104,6 +117,7 @@ class PathIntegrator:
         self.loss_atol = loss_atol if loss_atol is not None else atol
         self.max_batch = max_batch
         self.save_samples = save_samples
+        self.full_output = full_output
         self.device = device
         self.dtype = dtype
         self.N_integrals = 0
@@ -141,10 +155,17 @@ class PathIntegrator:
         Sets ``param.grad`` for each path parameter to the integrated
         gradient ``∫₀¹ ∂L/∂θ dt`` (accumulated, so multiple calls
         between ``optimizer.zero_grad()`` compose). Also returns the
-        underlying ``IntegralOutput`` with ``.loss`` set to
-        ``‖∫∇L dt‖_∞`` for the convergence check, and ``.samples`` set
-        to a ``SamplesCache`` (or ``None``) holding per-quadrature-point
-        energies/forces when ``save_samples=True``.
+        underlying ``IntegralOutput`` enriched with popcornn-level
+        fields:
+
+        - ``.grad_integral``: alias for the flat ``[D]`` integrated
+          gradient (same tensor as ``.integral`` from torchpathint;
+          named for clarity at popcornn call sites).
+        - ``.grad_norm``: ``‖∫∇L dt‖_∞`` (convergence trigger).
+        - ``.grad_norm_2``: ``‖∫∇L dt‖_2`` (monitoring only).
+        - ``.loss``: scalar ``∫L(t) dt`` when ``track_loss=True``.
+        - ``.samples``: ``SamplesCache`` (or ``None``) holding
+          per-quadrature-point energies/forces when ``save_samples=True``.
 
         Parameters
         ----------
@@ -198,6 +219,12 @@ class PathIntegrator:
             )
             return torch.cat([g.reshape(n, -1) for g in grads], dim=-1)  # [N, D]
 
+        # full_output gates whether torchpathint populates .t and .y on the
+        # returned IntegralOutput. Required when something downstream reads
+        # them: _stitch_samples (save_samples=True) or popcornn._optimize's
+        # per-iter JSON dump (caller sets self.full_output=True). Off by
+        # default to avoid the diagnostic-buffer overhead.
+        full_output = self.save_samples or self.full_output
         integral_output = path_integral(
             f,
             t_init_0d,
@@ -206,14 +233,21 @@ class PathIntegrator:
             atol=self.atol,
             rtol=self.rtol,
             max_batch=self.max_batch,
+            full_output=full_output,
             device=self.device,
             dtype=self.dtype,
         )
 
+        # ``integral_output.integral`` is torchpathint's generic name for the
+        # integrated function value — here it's the flat [D] gradient. Alias
+        # to ``.grad_integral`` so popcornn-internal call sites read clearly
+        # without disambiguating against the loss-integral pass below.
+        integral_output.grad_integral = integral_output.integral
+
         # Scatter the [D] integrated gradient into param.grad. Accumulate so
         # multiple integrate_path calls between optimizer.zero_grad() compose.
         offset = 0
-        flat = integral_output.integral.detach()
+        flat = integral_output.grad_integral.detach()
         for p, k in zip(params, sizes):
             chunk = flat[offset:offset + k].reshape(p.shape)
             p.grad = chunk if p.grad is None else p.grad + chunk
@@ -223,7 +257,9 @@ class PathIntegrator:
         # max) as the convergence signal consumed by PathOptimizer's threshold
         # check. L∞ is closer to MLP-size-independent than L2 — the latter scales
         # with √D and forces the threshold to be retuned per parameter count.
-        integral_output.loss = flat.abs().max()
+        # Also expose L2 for monitoring (cheap on the same flat tensor).
+        integral_output.grad_norm = flat.abs().max()
+        integral_output.grad_norm_2 = flat.norm()
 
         if self.save_samples:
             integral_output.samples = self._stitch_samples(sample_buffer, integral_output.t)
@@ -249,7 +285,7 @@ class PathIntegrator:
                 device=self.device,
                 dtype=self.dtype,
             )
-            integral_output.loss_integral = loss_output.integral.detach()
+            integral_output.loss = loss_output.integral.detach()
 
         self.integral_output = integral_output
         self.N_integrals += 1

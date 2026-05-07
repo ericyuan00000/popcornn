@@ -88,7 +88,7 @@ def run_one(rtol, atol, lr, base_cfg, n_steps, track_loss=True,
     optr = PathOptimizer(path=mep.path, **leg['optimizer_params'],
                          device=mep.device, dtype=mep.dtype)
 
-    grad_norms, loss_integrals, n_nodes, wall = [], [], [], []
+    grad_norms, losses, n_nodes, wall = [], [], [], []
     plateaued = False
     for step in range(n_steps):
         t0 = time_mod.perf_counter()
@@ -97,18 +97,18 @@ def run_one(rtol, atol, lr, base_cfg, n_steps, track_loss=True,
         except Exception as exc:
             return {
                 'rtol': rtol, 'atol': atol, 'lr': lr,
-                'grad_norms': grad_norms, 'loss_integrals': loss_integrals,
+                'grad_norms': grad_norms, 'losses': losses,
                 'n_nodes': n_nodes, 'wall_per_step': wall,
                 'failed': True, 'error': str(exc), 'plateaued': False,
             }
         wall.append(time_mod.perf_counter() - t0)
-        grad_norms.append(float(out.loss.item()))
+        grad_norms.append(float(out.grad_norm.item()))
         n_nodes.append(int(out.t.shape[0]))
         if track_loss:
-            loss_integrals.append(float(out.loss_integral[0].item()))
+            losses.append(float(out.loss[0].item()))
         if not math.isfinite(grad_norms[-1]):
             break
-        if track_loss and not math.isfinite(loss_integrals[-1]):
+        if track_loss and not math.isfinite(losses[-1]):
             break
         # Adaptive plateau early-stop: only after min_steps and at every
         # plateau_check_every. Compares rolling-median of last plateau_window
@@ -116,19 +116,19 @@ def run_one(rtol, atol, lr, base_cfg, n_steps, track_loss=True,
         if (stop_on_plateau and track_loss
                 and step + 1 >= max(min_steps, 2 * plateau_window)
                 and (step + 1) % plateau_check_every == 0):
-            recent = window_median(loss_integrals,
-                                   len(loss_integrals) - plateau_window,
-                                   len(loss_integrals))
-            prior = window_median(loss_integrals,
-                                  len(loss_integrals) - 2 * plateau_window,
-                                  len(loss_integrals) - plateau_window)
+            recent = window_median(losses,
+                                   len(losses) - plateau_window,
+                                   len(losses))
+            prior = window_median(losses,
+                                  len(losses) - 2 * plateau_window,
+                                  len(losses) - plateau_window)
             if (recent is not None and prior is not None and prior != 0
                     and abs(recent - prior) <= plateau_tol * abs(prior)):
                 plateaued = True
                 break
     return {
         'rtol': rtol, 'atol': atol, 'lr': lr,
-        'grad_norms': grad_norms, 'loss_integrals': loss_integrals,
+        'grad_norms': grad_norms, 'losses': losses,
         'n_nodes': n_nodes, 'wall_per_step': wall,
         'failed': False, 'plateaued': plateaued,
     }
@@ -149,25 +149,25 @@ def late_window(xs):
     return (lo, n)
 
 
-def is_descending(loss_integrals):
-    if len(loss_integrals) < 20:
+def is_descending(losses):
+    if len(losses) < 20:
         return False
-    L_early = window_median(loss_integrals, 0, 10)
-    lo, hi = late_window(loss_integrals)
-    L_late = window_median(loss_integrals, lo, hi)
+    L_early = window_median(losses, 0, 10)
+    lo, hi = late_window(losses)
+    L_late = window_median(losses, lo, hi)
     if L_early is None or L_late is None:
         return False
     return L_late <= 0.5 * L_early
 
 
-def is_diverging(loss_integrals):
-    if any(not math.isfinite(x) for x in loss_integrals):
+def is_diverging(losses):
+    if any(not math.isfinite(x) for x in losses):
         return True
-    if len(loss_integrals) < 20:
+    if len(losses) < 20:
         return False
-    L_early = window_median(loss_integrals, 0, 10)
-    lo, hi = late_window(loss_integrals)
-    L_late = window_median(loss_integrals, lo, hi)
+    L_early = window_median(losses, 0, 10)
+    lo, hi = late_window(losses)
+    L_late = window_median(losses, lo, hi)
     if L_early is None or L_late is None:
         return False
     return L_late > 1.5 * L_early
@@ -196,11 +196,11 @@ def run_sweep_a(base_cfg):
     for rtol, atol, lr in product(A_RTOLS, A_ATOLS, A_LRS):
         r = run_one(rtol, atol, lr, base_cfg, A_STEPS, track_loss=True)
         rows.append(r)
-        if r['failed'] or not r['loss_integrals']:
+        if r['failed'] or not r['losses']:
             err = r.get('error', 'empty trajectory')
             print(f'{rtol:>8.0e} {atol:>8.0e} {lr:>8.0e}  failed: {err}')
             continue
-        L, G = r['loss_integrals'], r['grad_norms']
+        L, G = r['losses'], r['grad_norms']
         L_early = window_median(L, 0, 10)
         lo, hi = late_window(L)
         L_late = window_median(L, lo, hi)
@@ -236,11 +236,11 @@ def run_sweep_b(base_cfg):
         r = run_one(rtol, atol, B_LR, base_cfg, B_MAX_STEPS, track_loss=True,
                     stop_on_plateau=True)
         rows.append(r)
-        if r['failed'] or not r['loss_integrals']:
+        if r['failed'] or not r['losses']:
             err = r.get('error', 'empty trajectory')
             print(f'{rtol:>8.0e} {atol:>8.0e}  failed: {err}')
             continue
-        L, G = r['loss_integrals'], r['grad_norms']
+        L, G = r['losses'], r['grad_norms']
         n = len(L)
         win = max(1, int(round(LATE_FRAC * n)))
         L_late = window_median(L, n - win, n)
@@ -267,7 +267,7 @@ def pick_rough(a_rows):
     patience=3 actually triggers convergence.
     """
     descending = [r for r in a_rows
-                  if not r['failed'] and is_descending(r['loss_integrals'])]
+                  if not r['failed'] and is_descending(r['losses'])]
     if not descending:
         return None
     # Loosest tolerance: largest rtol, tiebreak largest atol.
@@ -297,11 +297,11 @@ def pick_tight(b_rows, a_rows):
     """
     candidates = []
     for r in b_rows:
-        if r['failed'] or not r['loss_integrals']:
+        if r['failed'] or not r['losses']:
             continue
         if not r.get('plateaued', False):
             continue  # ran to B_MAX_STEPS without plateauing — not at the floor
-        L, G = r['loss_integrals'], r['grad_norms']
+        L, G = r['losses'], r['grad_norms']
         n = len(L)
         win = max(1, int(round(LATE_FRAC * n)))
         G_late = median(G[n - win:])
@@ -321,7 +321,7 @@ def pick_tight(b_rows, a_rows):
                if r['rtol'] == chosen['rtol']
                and r['atol'] == chosen['atol']
                and r['lr'] == 1e-3]
-    if not a_match or not is_descending(a_match[0]['loss_integrals']):
+    if not a_match or not is_descending(a_match[0]['losses']):
         lr = 1e-4
 
     threshold = round_up_pow10(G_late)

@@ -54,9 +54,9 @@ def main():
     t0 = time_mod.perf_counter()
     for step in range(N_STEPS):
         out = optr.optimization_step(mep.path, integ)
-        flat = out.integral.detach()
+        flat = out.grad_integral.detach()
         iters.append(step)
-        losses.append(float(out.loss_integral[0].item()))
+        losses.append(float(out.loss[0].item()))
         g2.append(float(flat.norm().item()))
         ginf.append(float(flat.abs().max().item()))
         if step < 10 or step % 25 == 0:

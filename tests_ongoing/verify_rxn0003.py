@@ -73,10 +73,10 @@ def run_stage(mep, idx, leg, instrument):
         wall = time_mod.perf_counter() - ts
         if not instrument:
             continue
-        flat = out.integral.detach()
+        flat = out.grad_integral.detach()
         gi = float(flat.abs().max().item())
         g2v = float(flat.norm().item())
-        lv = float(out.loss_integral[0].item())
+        lv = float(out.loss[0].item())
         losses.append(lv); g2.append(g2v); ginf.append(gi)
         walls.append(wall); n_nodes.append(int(out.t.shape[0]))
         if optr.converged and converged_at is None:

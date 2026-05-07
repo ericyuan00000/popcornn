@@ -190,20 +190,36 @@ those if `ts_image` looks coarse.
 
 ## Logging per-iteration state
 
-If you set `output_dir` on the `Popcornn` constructor, each leg
-writes one JSON file per iteration to
-`<output_dir>/opt_<leg-index>/logs/output_<iter>.json`. Each file
-contains:
+Every run prints a sparse per-iter table to stdout (header at leg
+start, rows at iters 0/5/10/25/50/75/100/150/200/250 then every 50,
+plus the last; columns iter / loss / |g|_∞ / |g|_2 / step_s).
+This is on by default — no setup needed.
+
+For a programmatic record of the same scalar metrics, pass
+`metrics_log_path=<dir>` to `optimize_path`. Each leg writes one
+JSONL file `<dir>/opt_<leg-index>.jsonl` with one row per iteration:
+`iter`, `loss`, `grad_norm_inf`, `grad_norm_2`, `lr`, `step_s`,
+`wall_s`, `converged`. Rows are flushed each iteration so a killed
+run still leaves a valid file.
+
+When `output_dir` is set on the `Popcornn` constructor and you
+*don't* pass `metrics_log_path`, the JSONL log defaults to
+`<output_dir>/metrics/` so it lands next to the heavy per-iter dump
+described next.
+
+For full per-iter state — the path itself, energies, forces — set
+`output_dir`. Each leg then also writes one JSON file per iteration
+to `<output_dir>/opt_<leg-index>/logs/output_<iter>.json`, with:
 
 - `time`, `positions`, `energies`, `velocities`, `forces` — the path
   evaluated at the integrator's quadrature times.
 - `loss_evals` — per-time loss evaluations.
-- `integral` — the scalar integral value.
 - `grad_norm` — the L∞ norm of the path-integrated gradient (the
   convergence signal).
 - `ts_time`, `ts_positions`, `ts_energies`, `ts_velocities`,
   `ts_forces` — the predicted TS at this iteration.
-- `loss_integral` — only present if `track_loss: true`.
+- `loss` — the scalar loss integral $\int \mathcal{L}\,\mathrm{d}t$;
+  only present if `track_loss: true`.
 
 This is a lot of data. Don't enable it for production runs unless
 you're debugging.

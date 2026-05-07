@@ -67,8 +67,8 @@ def run_mlp(n_embed, depth, base_cfg):
     t0 = time_mod.perf_counter()
     for step in range(N_STEPS):
         out = optr.optimization_step(mep.path, integ)
-        flat = out.integral.detach()
-        losses.append(float(out.loss_integral[0].item()))
+        flat = out.grad_integral.detach()
+        losses.append(float(out.loss[0].item()))
         g2.append(float(flat.norm().item()))
         ginf.append(float(flat.abs().max().item()))
         if step in (0, 25, 50, 75, 100, 200, 300, N_STEPS - 1):
