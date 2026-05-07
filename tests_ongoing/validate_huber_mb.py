@@ -36,9 +36,12 @@ BASELINE_CFG = os.path.join(REPO_ROOT, 'examples/configs/muller_brown.yaml')
 
 CANDIDATES = [
     {'tag': 'huber_winner', 'lr': 1.0e-2, 'n_embed': 2, 'depth': 2,
-     'n_iter': 600, 'threshold': 1.0e-2},
+     'n_iter': 600, 'threshold': 1.0e-2, 'patience': 10},
 ]
 SEEDS = [0, 1, 2]
+# Patience override for the baseline (its shipped patience is 5). Set
+# both runs to the same value so the comparison is apples-to-apples.
+BASELINE_PATIENCE = 10
 
 
 def write_huber_cfg(base, c, dst):
@@ -52,6 +55,7 @@ def write_huber_cfg(base, c, dst):
     }
     leg['optimizer_params']['optimizer']['lr'] = c['lr']
     leg['optimizer_params']['threshold'] = c['threshold']
+    leg['optimizer_params']['patience'] = c['patience']
     leg['num_optimizer_iterations'] = c['n_iter']
     with open(dst, 'w') as f:
         yaml.dump(cfg, f)
@@ -104,10 +108,18 @@ def main():
     os.makedirs(OUT_BASE, exist_ok=True)
     results = []
 
-    # Baseline (two-stage).
+    # Baseline (two-stage). Override patience to BASELINE_PATIENCE so
+    # both runs share the same convergence-counter window.
+    baseline_base = yaml.safe_load(open(BASELINE_CFG))
+    for leg in baseline_base.get('optimization_params', []):
+        leg['optimizer_params']['patience'] = BASELINE_PATIENCE
     for seed in SEEDS:
         out_dir = os.path.join(OUT_BASE, f'baseline_s{seed}')
-        if run_one(BASELINE_CFG, seed, out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+        cfg_path = os.path.join(out_dir, 'config.yaml')
+        with open(cfg_path, 'w') as f:
+            yaml.dump(baseline_base, f)
+        if run_one(cfg_path, seed, out_dir):
             r = analyze(out_dir)
             r.update({'config': 'baseline_2stage', 'seed': seed})
             results.append(r)
