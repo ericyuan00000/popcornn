@@ -32,11 +32,14 @@ class _LegLogger:
     Streams a header at leg start, sparse per-iter rows via
     ``tqdm.write`` (so the rows interleave with the iteration bar),
     a convergence-trigger announcement, and a leg-end summary to
-    stdout.
+    stdout. When ``metrics_log_path`` is provided, also writes one
+    JSONL row per iteration with the full scalar metric set —
+    flushed each row so a killed run leaves a partial-but-valid
+    file.
     """
 
     def __init__(self, leg_idx, integrand_terms, lr, threshold,
-                 n_iter, n_params):
+                 n_iter, n_params, metrics_log_path=None):
         self.leg_idx = leg_idx
         self.n_iter = n_iter
         terms_str = (
@@ -55,12 +58,30 @@ class _LegLogger:
         )
         self._t_start = time.perf_counter()
 
+        self._metrics_fh = None
+        if metrics_log_path is not None:
+            parent = os.path.dirname(metrics_log_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            self._metrics_fh = open(metrics_log_path, 'w')
+
     def row(self, it, loss, g_inf, g_2, step_s):
         loss_str = "—" if loss is None else f"{loss:12.4e}"
         tqdm.write(
             f"  {it:>6d}  {loss_str:>12s}  "
             f"{g_inf:12.4e}  {g_2:12.4e}  {step_s:8.4f}"
         )
+
+    def metrics(self, **fields):
+        """Append one JSONL row with scalar metrics. No-op when no
+        ``metrics_log_path`` was configured."""
+        if self._metrics_fh is None:
+            return
+        self._metrics_fh.write(json.dumps(fields) + "\n")
+        self._metrics_fh.flush()
+
+    def wall_s(self):
+        return time.perf_counter() - self._t_start
 
     def converged(self, it, g_inf, threshold, patience):
         tqdm.write(
@@ -70,12 +91,17 @@ class _LegLogger:
         )
 
     def end(self, iters_done):
-        wall = time.perf_counter() - self._t_start
+        wall = self.wall_s()
         ms_iter = 1000 * wall / max(1, iters_done)
         print(
             f"leg {self.leg_idx} done  iters={iters_done}  "
             f"wall={wall:.1f}s  ms/iter={ms_iter:.1f}"
         )
+
+    def close(self):
+        if self._metrics_fh is not None:
+            self._metrics_fh.close()
+            self._metrics_fh = None
 
 
 class Popcornn:
@@ -160,7 +186,8 @@ class Popcornn:
     def optimize_path(
             self,
             *optimization_params: list[dict],
-            output_ase_atoms: bool = True
+            output_ase_atoms: bool = True,
+            metrics_log_path: str | None = None,
     ):
         """
         Run a chain of optimization legs and return the final path.
@@ -186,6 +213,14 @@ class Popcornn:
         output_ase_atoms : bool, default=True
             If True and the input was ASE ``Atoms``, return ``Atoms``
             objects rather than raw ``PathOutput`` tensors.
+        metrics_log_path : str, optional
+            If set, treated as a directory; each leg writes one JSONL
+            file ``<metrics_log_path>/opt_{i}.jsonl`` with one scalar
+            metrics row per iteration (iter, loss, grad_norm_inf,
+            grad_norm_2, lr, step_s, wall_s, converged). Independent
+            of ``output_dir`` — the existing big per-iter JSON dump
+            (which contains positions/energies/forces) is gated only
+            on ``output_dir``.
 
         Returns
         -------
@@ -196,17 +231,24 @@ class Popcornn:
             when the optimizer ran with ``find_ts=False``.
         """
         # Optimize the path
+        if metrics_log_path is not None:
+            os.makedirs(metrics_log_path, exist_ok=True)
         for i, params in enumerate(optimization_params):
             if self.output_dir is not None:
                 output_dir = f"{self.output_dir}/opt_{i}"
             else:
                 output_dir = None
+            if metrics_log_path is not None:
+                leg_metrics_path = os.path.join(metrics_log_path, f"opt_{i}.jsonl")
+            else:
+                leg_metrics_path = None
 
             self._optimize(
                 **params,
                 output_dir=output_dir,
                 output_ase_atoms=output_ase_atoms,
                 leg_idx=i,
+                metrics_log_path=leg_metrics_path,
             )
 
         # Evaluate points along the optimized path and return
@@ -235,6 +277,7 @@ class Popcornn:
             output_dir: str | None = None,
             output_ase_atoms: bool = True,
             leg_idx: int = 0,
+            metrics_log_path: str | None = None,
     ):
         """
         Run a single optimization leg.
@@ -263,6 +306,11 @@ class Popcornn:
         leg_idx : int, default=0
             Index of this leg in the parent ``optimize_path`` chain;
             used only for the stdout progress header.
+        metrics_log_path : str, optional
+            If set, write one JSONL row per iteration to this exact
+            file path with scalar metrics (iter, loss, grad_norm_inf,
+            grad_norm_2, lr, step_s, wall_s, converged). Flushed after
+            each row so a killed run leaves a partial-but-valid file.
         """
         # Create output directories
         if output_dir is not None:
@@ -289,7 +337,8 @@ class Popcornn:
             os.makedirs(log_dir, exist_ok=True)
         
         # Per-leg progress logger: header now, sparse rows during the loop,
-        # convergence/leg-end summary on exit.
+        # convergence/leg-end summary on exit. Optional JSONL written
+        # via the same logger when metrics_log_path is set.
         logger = _LegLogger(
             leg_idx=leg_idx,
             integrand_terms=integrator._terms,
@@ -297,6 +346,7 @@ class Popcornn:
             threshold=optimizer.threshold,
             n_iter=num_optimizer_iterations,
             n_params=sum(p.numel() for p in self.path.parameters()),
+            metrics_log_path=metrics_log_path,
         )
 
         last_iter = num_optimizer_iterations - 1
@@ -304,6 +354,7 @@ class Popcornn:
 
         # Optimize the path
         for optim_idx in tqdm(range(num_optimizer_iterations), leave=False):
+            lr = optimizer.optimizer.param_groups[0]['lr']
             t_step = time.perf_counter()
             try:
                 integral_output = optimizer.optimization_step(self.path, integrator)
@@ -313,16 +364,24 @@ class Popcornn:
             step_s = time.perf_counter() - t_step
             iters_done = optim_idx + 1
 
+            loss_attr = getattr(integral_output, 'loss', None)
+            loss_v = float(loss_attr[0].item()) if loss_attr is not None else None
+            g_inf = integral_output.grad_norm.item()
+            g_2 = integral_output.grad_norm_2.item()
+
             if _should_print(optim_idx, last_iter):
-                loss_attr = getattr(integral_output, 'loss', None)
-                loss_v = float(loss_attr[0].item()) if loss_attr is not None else None
-                logger.row(
-                    optim_idx,
-                    loss_v,
-                    integral_output.grad_norm.item(),
-                    integral_output.grad_norm_2.item(),
-                    step_s,
-                )
+                logger.row(optim_idx, loss_v, g_inf, g_2, step_s)
+
+            logger.metrics(
+                iter=optim_idx,
+                loss=loss_v,
+                grad_norm_inf=g_inf,
+                grad_norm_2=g_2,
+                lr=lr,
+                step_s=step_s,
+                wall_s=logger.wall_s(),
+                converged=bool(optimizer.converged),
+            )
 
             # Save the path
             if output_dir is not None:
@@ -374,4 +433,5 @@ class Popcornn:
                 break
 
         logger.end(iters_done)
+        logger.close()
 
