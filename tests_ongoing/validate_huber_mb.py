@@ -1,15 +1,14 @@
-"""Multi-seed validation of the top Müller-Brown Huber candidates.
+"""Multi-seed validation of the winning Müller-Brown Huber settings.
 
-Two candidates from sweep_huber_mb_hp.py (1-seed exploration):
-  A. quality:  lr=1e-3, (n_embed=16, depth=4) — best path quality
-                                                  (f⊥_TS=0.020 @ iter 230)
-  B. speed:    lr=1e-2, (n_embed=32, depth=6) — fastest to converge
-                                                  (f⊥_TS=0.050 @ iter 110)
+Winner from sweep_huber_mb_hp.py (small-MLP 1-seed exploration):
+  δ = 1.0
+  lr = 1e-2
+  (n_embed=2, depth=2)  — 18 trainable params
+  threshold = 1e-2      (rounded power of 10 from analyzer's 2.1e-2)
+  num_optimizer_iterations = 600  (winner converged at iter 255 single-seed)
 
 Plus the shipped two-stage baseline for reference. Three seeds each
 to confirm 1-seed exploration is seed-robust before locking in.
-threshold=0 so each run shows its own convergence trajectory; we
-read the recommended threshold off the multi-seed |g|@best.
 
 Usage on NERSC interactive GPU:
     srun -A m2834 -q interactive -C gpu --exclusive \\
@@ -36,8 +35,8 @@ HUBER_CFG = os.path.join(REPO_ROOT, 'examples/configs/muller_brown_huber.yaml')
 BASELINE_CFG = os.path.join(REPO_ROOT, 'examples/configs/muller_brown.yaml')
 
 CANDIDATES = [
-    {'tag': 'A_quality', 'lr': 1.0e-3, 'n_embed': 16, 'depth': 4, 'n_iter': 400},
-    {'tag': 'B_speed',   'lr': 1.0e-2, 'n_embed': 32, 'depth': 6, 'n_iter': 200},
+    {'tag': 'huber_winner', 'lr': 1.0e-2, 'n_embed': 2, 'depth': 2,
+     'n_iter': 600, 'threshold': 1.0e-2},
 ]
 SEEDS = [0, 1, 2]
 
@@ -52,7 +51,7 @@ def write_huber_cfg(base, c, dst):
         'pvre_huber': {'delta': 1.0},
     }
     leg['optimizer_params']['optimizer']['lr'] = c['lr']
-    leg['optimizer_params']['threshold'] = 0.0
+    leg['optimizer_params']['threshold'] = c['threshold']
     leg['num_optimizer_iterations'] = c['n_iter']
     with open(dst, 'w') as f:
         yaml.dump(cfg, f)
