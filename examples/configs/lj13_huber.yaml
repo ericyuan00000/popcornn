@@ -28,6 +28,9 @@ optimization_params:
       optimizer:
         name: adam
         lr: 1.0e-4
-      threshold: 1.0e-3
+      # threshold=0 disables the |g|_inf early-stop trigger so the same
+      # iter budget is used for every δ in a sweep — see notes in
+      # muller_brown_huber.yaml. Read convergence off |F_⊥|_TS plateau.
+      threshold: 0.0
       find_ts: false
-    num_optimizer_iterations: 400
+    num_optimizer_iterations: 800
