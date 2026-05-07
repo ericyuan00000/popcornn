@@ -1,0 +1,28 @@
+initialization_params:
+  images: [[-0.558, 1.442], [0.623, 0.028]]
+  path_params:
+    name: mlp
+    n_embed: 8
+    depth: 4
+    activation: gelu
+optimization_params:
+  # Single-stage Huber. δ=10 puts the seam ~one OOM above the typical
+  # |v·F| at the saddle (the existing two-stage threshold for stage 2 is
+  # 1.0). Within |v·F|≤δ the gradient is smooth (∂L/∂θ ∝ s, like
+  # pvre_squared), outside it's constant-magnitude (∂L/∂θ ∝ δ·sign(s),
+  # like pvre) — so one leg covers both warm-up and fine-tune. Compare
+  # against the two-stage muller_brown.yaml.
+  - potential_params:
+      name: muller_brown
+    integrator_params:
+      path_integrand_names: pvre_huber
+      path_integrand_kwargs:
+        pvre_huber:
+          delta: 1.0e+1
+      rtol: 1.0e-2
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-3
+      threshold: 1.0
+    num_optimizer_iterations: 200

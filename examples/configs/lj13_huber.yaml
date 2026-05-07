@@ -1,0 +1,33 @@
+initialization_params:
+  images: examples/configs/lj13.xyz
+  path_params:
+    name: mlp
+    n_embed: 8
+    depth: 6
+    activation: gelu
+  num_record_points: 101
+  device: cuda
+  seed: 0
+optimization_params:
+  # Single-stage Huber. δ=0.1 sits between the two-stage thresholds 1.0
+  # (stage 1) and 1e-3 (stage 2): the basin where gradient ∝ s covers the
+  # late-fine-tune regime, while the linear arms behave like δ·pvre while
+  # the path is still warming up. Compare against lj13.yaml.
+  - potential_params:
+      name: lennard_jones
+      epsilon: 1.0
+      sigma: 1.0
+      cutoff: 3.0
+    integrator_params:
+      path_integrand_names: pvre_huber
+      path_integrand_kwargs:
+        pvre_huber:
+          delta: 1.0e-1
+      rtol: 1.0e-2
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-4
+      threshold: 1.0e-3
+      find_ts: false
+    num_optimizer_iterations: 400
