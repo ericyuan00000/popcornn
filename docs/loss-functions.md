@@ -60,6 +60,50 @@ to the MEP cheaply but plateaus before pinpointing the TS. Pair it with
 faster than single-leg `pvre`. See [Advanced](advanced.md) for the
 multi-leg recipe.
 
+### `pvre_huber`
+
+$$
+\ell = \begin{cases}
+\tfrac{1}{2} (\mathbf{v} \cdot \mathbf{F})^2
+  & \text{if } |\mathbf{v} \cdot \mathbf{F}| \le \delta \\
+\delta \, \big(|\mathbf{v} \cdot \mathbf{F}| - \tfrac{1}{2}\delta\big)
+  & \text{otherwise}
+\end{cases}
+$$
+
+A Huber loss on the dot product $s = \mathbf{v}\cdot\mathbf{F}$.
+Quadratic near $s=0$ (smooth like `pvre_squared`, so adaptive
+Gauss–Kronrod converges) and linear far from zero (constant-magnitude
+gradient like `pvre`, so the path keeps moving while warm),
+$C^1$-continuous at $|s|=\delta$.
+
+The single hyperparameter `delta` ($\delta$) sets where the regime
+switches. As $\delta \to \infty$, `pvre_huber` $\to$ $\tfrac{1}{2}\,$
+`pvre_squared`. As $\delta \to 0$, `pvre_huber` $\to$ $\delta\,\cdot$
+`pvre`. So a $\delta$-sweep interpolates between `pvre_squared` and
+`pvre` with one knob — turning the manual two-leg
+`pvre_squared → pvre` schedule into a single continuously-parameterized
+leg.
+
+**Configuring $\delta$:**
+
+```yaml
+integrator_params:
+  path_integrand_names: pvre_huber
+  path_integrand_kwargs:
+    pvre_huber:
+      delta: 1.0
+  rtol: 1.0e-2
+```
+
+**Picking $\delta$:** rule of thumb is one order of magnitude above the
+target $|\mathbf{v}\cdot\mathbf{F}|$ at the saddle (so the basin is
+quadratic by the time you converge) and well below the typical
+$|\mathbf{v}\cdot\mathbf{F}|$ early in optimization (so the linear arms
+dominate while warming up). The right $\delta$ is per-system; treat it
+the same as the per-system `threshold` you'd hand-tune for a two-leg
+schedule.
+
 ### `pvre_mag`
 
 $$\ell = \big\| \mathbf{v}(t) \odot \mathbf{F}(t) \big\|_2$$
@@ -119,6 +163,7 @@ For a typical reaction:
 | --- | --- |
 | Resolve atom clashes (pre-step) | `geodesic` with `potential_params.name: repel` |
 | Find the minimum-energy path | `pvre`, or a `pvre_squared → pvre` schedule for ~3.5× speedup (see `examples/configs/muller_brown.yaml`) |
+| Same as above in one leg (no warm-up/fine-tune split) | `pvre_huber` with a per-system `delta` |
 | Find the path *and* keep it short | combine pVRE + VRE with scales (see `examples/configs/loss_example.yaml`) |
 | Maximize the TS energy | apply `E_mean` as a TS-region loss (see [Advanced](advanced.md)) |
 | Minimize the TS force magnitude | apply `F_mag` as a TS-time loss |

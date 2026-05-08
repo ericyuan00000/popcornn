@@ -111,6 +111,66 @@ class pVRESquared(PathIntegrand):
         return overlap ** 2
 
 
+class pVREHuber(PathIntegrand):
+    """Huber on ``s = v · F``.
+
+    ``½·s²`` for ``|s| ≤ δ``; ``δ·(|s| − ½·δ)`` otherwise. C¹-smooth at
+    the seam (gradient ``δ·sign(s)`` on the linear arm matches ``s`` on
+    the quadratic side at ``|s|=δ``), so adaptive Gauss–Kronrod doesn't
+    refine indefinitely the way ``pvre``'s ``|s|`` kink forces it to,
+    while the linear arms keep ``∂L/∂θ`` constant-magnitude far from the
+    saddle — unlike ``pvre_squared``, whose ``∂L/∂θ ∝ s`` plateaus once
+    the path is close. Sweeps δ to interpolate one-shot between the two:
+    δ → ∞ recovers ``½·pvre_squared``; δ → 0 recovers ``δ·pvre``.
+    """
+
+    requires = ('forces', 'velocities')
+
+    def __init__(self, delta=1.0):
+        if delta <= 0:
+            raise ValueError(f"pvre_huber delta must be positive, got {delta}.")
+        self.delta = float(delta)
+
+    def evaluate(self, variables):
+        overlap = torch.sum(
+            variables['velocities'] * variables['forces'],
+            dim=-1,
+            keepdim=True,
+        )
+        abs_overlap = overlap.abs()
+        quadratic = 0.5 * overlap ** 2
+        linear = self.delta * (abs_overlap - 0.5 * self.delta)
+        return torch.where(abs_overlap <= self.delta, quadratic, linear)
+
+
+class pVREPseudoHuber(PathIntegrand):
+    """Pseudo-Huber on ``s = v · F``: ``δ²·(√(1 + (s/δ)²) − 1)``.
+
+    Same δ-controlled interpolation between ``pvre_squared`` and ``pvre``
+    as ``pvre_huber`` (δ → ∞ ⇒ ``½·s²``; δ → 0 ⇒ ``δ·|s|``), but C^∞
+    everywhere — there is no piecewise seam at ``|s|=δ``, just a smooth
+    transition. The integrand ``∂L/∂s = s / √(1 + (s/δ)²)`` is bounded
+    by ``±δ`` and analytic, so adaptive Gauss–Kronrod converges at its
+    design rate without the local subdivision Huber's slope corner at
+    ``|s|=δ`` provokes.
+    """
+
+    requires = ('forces', 'velocities')
+
+    def __init__(self, delta=1.0):
+        if delta <= 0:
+            raise ValueError(f"pvre_pseudo_huber delta must be positive, got {delta}.")
+        self.delta = float(delta)
+
+    def evaluate(self, variables):
+        overlap = torch.sum(
+            variables['velocities'] * variables['forces'],
+            dim=-1,
+            keepdim=True,
+        )
+        return self.delta ** 2 * (torch.sqrt(1.0 + (overlap / self.delta) ** 2) - 1.0)
+
+
 class Energy(PathIntegrand):
     """Raw potential energy."""
 
@@ -156,6 +216,8 @@ PATH_INTEGRANDS: dict[str, type[PathIntegrand]] = {
     'pvre': pVRE,
     'pvre_mag': pVREMag,
     'pvre_squared': pVRESquared,
+    'pvre_huber': pVREHuber,
+    'pvre_pseudo_huber': pVREPseudoHuber,
     'vre': VRE,
     'vre_error': VREError,
     'E': Energy,
@@ -173,7 +235,7 @@ class IntegrandTerm:
     scale: float
 
 
-def build_integrand_terms(names, scales=None) -> list[IntegrandTerm]:
+def build_integrand_terms(names, scales=None, kwargs=None) -> list[IntegrandTerm]:
     """Look ``names`` up in ``PATH_INTEGRANDS``, instantiate, pair with scales.
 
     Parameters
@@ -182,11 +244,18 @@ def build_integrand_terms(names, scales=None) -> list[IntegrandTerm]:
         Registry keys.
     scales : float, list[float], torch.Tensor, or None
         Per-term weights; defaults to all ones.
+    kwargs : dict[str, dict] or None
+        Per-term constructor kwargs, keyed by name. ``{}`` or ``None`` falls
+        back to a no-arg constructor for every term, which is what every
+        unparameterized integrand wants. Only the integrands that take
+        ``__init__`` arguments (e.g. ``pvre_huber``'s ``delta``) need an
+        entry here; all other names ignore ``kwargs`` even when present.
 
     Raises
     ------
     ValueError
-        On unknown names, duplicate names, or scale-length mismatch.
+        On unknown names, duplicate names, scale-length mismatch, or
+        ``kwargs`` keys that don't appear in ``names``.
     """
     if names is None or (isinstance(names, (list, tuple)) and len(names) == 0):
         raise ValueError("Must supply at least one integrand name.")
@@ -206,6 +275,15 @@ def build_integrand_terms(names, scales=None) -> list[IntegrandTerm]:
             f"number of scales ({len(scales)})."
         )
 
+    if kwargs is None:
+        kwargs = {}
+    stray = set(kwargs) - set(names)
+    if stray:
+        raise ValueError(
+            f"path_integrand_kwargs has keys not in names: {sorted(stray)}; "
+            f"names = {names}."
+        )
+
     seen: set[str] = set()
     terms: list[IntegrandTerm] = []
     for name, scale in zip(names, scales):
@@ -218,7 +296,7 @@ def build_integrand_terms(names, scales=None) -> list[IntegrandTerm]:
         seen.add(name)
         terms.append(IntegrandTerm(
             name=name,
-            integrand=PATH_INTEGRANDS[name](),
+            integrand=PATH_INTEGRANDS[name](**kwargs.get(name, {})),
             scale=float(scale),
         ))
     return terms

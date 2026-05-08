@@ -46,10 +46,18 @@ import torch
 
 
 def _quality(mep, time_grid):
-    """Path-intrinsic quality metrics for the current path."""
-    with torch.no_grad():
-        po = mep.path(time_grid, return_velocities=False,
-                      return_energies=True, return_forces=True)
+    """Path-intrinsic quality metrics for the current path.
+
+    Stays outside ``torch.no_grad`` because autograd-derived potentials
+    (e.g. ``muller_brown``) compute forces via ``torch.autograd.grad``,
+    which silently fails under ``no_grad``. We ``.detach()`` immediately
+    afterwards so the graph from this single forward is dropped before
+    we touch numpy. Cost on autograd potentials is one small graph
+    build per quality sample; on analytic-force potentials (LJ, UMA)
+    no graph is built and the cost is unchanged.
+    """
+    po = mep.path(time_grid, return_velocities=False,
+                  return_energies=True, return_forces=True)
     e = po.energies.detach().cpu().numpy().reshape(-1)
     f = po.forces.detach().cpu().numpy()
     pos = po.positions.detach().cpu().numpy()
