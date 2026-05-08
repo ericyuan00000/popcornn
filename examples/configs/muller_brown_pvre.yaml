@@ -1,0 +1,28 @@
+# Single-stage Müller-Brown using pvre (|v·F|).
+# Cold-start baseline at lr=1e-3 on the locked n8d4 MLP. Pvre's
+# sign-driven gradient converges cleanly without rebound on this
+# capacity (see project_popcornn_mb_gnorm_trigger_failure.md), but
+# without a pvre² warm-up the dip iter is later than the two-stage
+# recipe — that's the cost the pvre² stage amortizes. Benchmarked
+# alongside muller_brown_pseudo.yaml and muller_brown_two_stage.yaml
+# in tests_ongoing/bench_mb_recipes.py.
+initialization_params:
+  images: [[-0.558, 1.442], [0.623, 0.028]]
+  path_params:
+    name: mlp
+    n_embed: 8
+    depth: 4
+    activation: gelu
+optimization_params:
+  - potential_params:
+      name: muller_brown
+    integrator_params:
+      path_integrand_names: pvre
+      rtol: 1.0e-2
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-3
+      threshold: 1.0e-1
+      patience: 10
+    num_optimizer_iterations: 2000
