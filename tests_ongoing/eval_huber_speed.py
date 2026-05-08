@@ -16,6 +16,7 @@ comes from the slope corner at ``|s|=δ`` (C¹ but not C²): pseudo-Huber
 shares Huber's bounded-gradient behaviour but is C^∞, so adaptive GK
 should not subdivide locally there.
 """
+import json
 import os
 import sys
 import time
@@ -126,6 +127,26 @@ def main():
         if 'huber' in label.lower():
             print(f'  {label:<24s}: {med/pvre_t:.3f}x pvre  '
                   f'{med/pvre_sq_t:.3f}x pvre² ({pvre_t/med:.2f}x faster than pvre)')
+
+    out_path = os.environ.get(
+        'EVAL_OUT',
+        '/pscratch/sd/e/ericyuan/temp/popcornn_huber_speed_n8d4.json',
+    )
+    payload = {
+        'mlp': {'n_embed': 8, 'depth': 4, 'activation': 'gelu'},
+        'warmup_iters': WARMUP_ITERS,
+        'n_repeats': N_REPEATS,
+        'rtol': 1.0e-2, 'atol': 1.0e-7, 'method': 'gk21',
+        'rows': [
+            {'label': label, 'med_s': med, 'p25_s': p25, 'p75_s': p75,
+             'eval_pts': n_eval}
+            for label, med, p25, p75, n_eval in rows
+        ],
+    }
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, 'w') as f:
+        json.dump(payload, f, indent=2)
+    print(f'\nresults saved: {out_path}')
 
 
 if __name__ == '__main__':
