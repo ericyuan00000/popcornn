@@ -5,11 +5,14 @@
 # TS argmax. n4d2 is the smallest capacity that holds F_2<1 across all
 # 3 seeds without late-iter rebound; lr=1e-3 keeps the |g|_∞ trajectory
 # monotone enough that a round-decade threshold + patience=1 fires at the
-# right time. Tighter rtol/atol give modestly better F_2 at stop but cost
-# 1.5–3× per iter — (1e-1, 1e-1) is the loosest pair where thr=1e-1 still
-# fires reliably (per the noise-floor rule: max(rtol·|g|, atol) ≲ thr/10).
+# right time.
 #
-# Mean wall to stop: ~29 s across 3 seeds, max F_2 at stop ≈ 0.44.
+# atol=1e-2, threshold=1e-1: atol/thr = 0.1 enforces the strict /10
+# noise-floor rule (mirrors lj13.yaml, which uses atol/thr = 1e-4/1e-3
+# = 0.1 for the same reason). Mean wall ~38s across 3 seeds, max F_2 at
+# stop ≈ 0.62 (1.6× headroom under target=1). Cheaper than the
+# both-tightened (atol=thr=1e-2) variant because thr=1e-1 fires earlier
+# in the descent.
 initialization_params:
   images: [[-0.558, 1.442], [0.623, 0.028]]
   path_params:
@@ -23,11 +26,11 @@ optimization_params:
     integrator_params:
       path_integrand_names: pvre
       rtol: 1.0e-1
-      atol: 1.0e-1
+      atol: 1.0e-2
     optimizer_params:
       optimizer:
         name: adam
         lr: 1.0e-3
       threshold: 1.0e-1
       patience: 1
-    num_optimizer_iterations: 1000   # typical converge ~400–725
+    num_optimizer_iterations: 1000   # typical converge ~210–500
