@@ -1,60 +1,33 @@
-# Two-stage Müller-Brown: pvre² warm-up then pseudo-Huber δ=1 fine-tune.
-# Both stages at lr=1e-3.
+# Single-stage Müller-Brown: pvre on a small MLP (n_embed=4, depth=2).
 #
-# Why pvre² → pseudo-Huber and not pvre² → pvre? Across 3 seeds on
-# this MLP at lr=1e-3 + threshold=1e-1, the pseudo δ=1 fine-tune
-# converges in ~30 s wall vs ~65 s for pvre, while still landing
-# F_TS ≈ 0.2 (5× below the F_TS=1 target on MB). Pseudo's smooth
-# integrand needs ~half the GK eval points per call. If you need
-# tighter F_TS quality (≈0.04), substitute `pvre_pseudo_huber` →
-# `pvre` in stage 2 — see muller_brown_two_stage.yaml.
+# Recipe picked from a 3-seed sweep over (capacity, lr, rtol, atol, thr)
+# at patience=1 with the |F|_2 < 1 stop criterion at the parabolic-refined
+# TS argmax. n4d2 is the smallest capacity that holds F_2<1 across all
+# 3 seeds without late-iter rebound; lr=1e-3 keeps the |g|_∞ trajectory
+# monotone enough that a round-decade threshold + patience=1 fires at the
+# right time. Tighter rtol/atol give modestly better F_2 at stop but cost
+# 1.5–3× per iter — (1e-1, 1e-1) is the loosest pair where thr=1e-1 still
+# fires reliably (per the noise-floor rule: max(rtol·|g|, atol) ≲ thr/10).
 #
-# Both stages share the same MLP and lr because the older
-# stage-1 lr=1e-2 / stage-2 lr=1e-4 split was the lr=1e-4 in stage 2
-# that made the path drift up after warm-up — the structure was
-# always sound; the tuning was wrong.
+# Mean wall to stop: ~29 s across 3 seeds, max F_2 at stop ≈ 0.44.
 initialization_params:
   images: [[-0.558, 1.442], [0.623, 0.028]]
   path_params:
     name: mlp
-    n_embed: 8
-    depth: 4
+    n_embed: 4
+    depth: 2
     activation: gelu
 optimization_params:
-  # Stage 1: pvre² warm-up.
-  # C^∞ smooth integrand, ~63 GK eval points per call (~5× cheaper
-  # than pvre at this rtol). Drives the path most of the way to the
-  # saddle in ~210 iters at lr=1e-3, but plateaus before pinpointing.
   - potential_params:
       name: muller_brown
     integrator_params:
-      path_integrand_names: pvre_squared
+      path_integrand_names: pvre
       rtol: 1.0e-1
-    optimizer_params:
-      optimizer:
-        name: adam
-        lr: 1.0e-3
-      threshold: 1.0e+3   # initial |g|_∞ ~3.8e+4; stop ~1.5 OOM down
-      patience: 10
-    num_optimizer_iterations: 500   # typical converge ~210
-  # Stage 2: pseudo-Huber δ=1 fine-tune.
-  # δ=1 puts the seam where |v·F| typically lives near the saddle.
-  # Inside |v·F|≤δ the gradient is smooth (∂L/∂θ ∝ s, like pvre²);
-  # outside it bridges to δ·sign(s) (like pvre) which keeps refining
-  # the path past the dip. ~half pvre's per-call cost (≈420 vs ~840
-  # GK eval pts).
-  - potential_params:
-      name: muller_brown
-    integrator_params:
-      path_integrand_names: pvre_pseudo_huber
-      path_integrand_kwargs:
-        pvre_pseudo_huber:
-          delta: 1.0
-      rtol: 1.0e-2
+      atol: 1.0e-1
     optimizer_params:
       optimizer:
         name: adam
         lr: 1.0e-3
       threshold: 1.0e-1
-      patience: 10
-    num_optimizer_iterations: 500   # typical converge ~190
+      patience: 1
+    num_optimizer_iterations: 1000   # typical converge ~400–725
