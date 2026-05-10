@@ -102,11 +102,16 @@ def main():
         ax.text(v + 0.01 * xmax, yi, str(v), va='center', fontsize=8)
 
     mlp = data['mlp']
+    system = data.get('system', 'MB').upper().replace('LJ13', 'LJ-13')
+    state = ('uninitialised' if data['warmup_iters'] == 0
+             else f'{data["warmup_iters"]}-iter pvre²-warmed')
+    atol_str = f'{data["atol"]:.0e}' if data['atol'] > 0 else '0'
     fig.suptitle(
-        f'integrand kernel cost on partly-trained MB '
-        f'(MLP n_embed={mlp["n_embed"]} depth={mlp["depth"]}, '
-        f'warmup={data["warmup_iters"]} pvre² steps, rtol={data["rtol"]:.0e}, '
-        f'gk21, {data["n_repeats"]} repeats)',
+        f'{system}: integrate_path cost vs loss kernel  ·  '
+        f'{state} path  ·  '
+        f'rtol={data["rtol"]:.0e}, atol={atol_str}, gk21  ·  '
+        f'MLP n{mlp["n_embed"]}d{mlp["depth"]} {mlp["activation"]}, '
+        f'{data["n_repeats"]} repeats',
         fontsize=10,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.96))

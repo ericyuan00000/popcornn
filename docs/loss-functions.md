@@ -54,11 +54,11 @@ converges in one pass.
 
 In practice `pvre_squared`'s gradient $\propto 2(\mathbf{v}\!\cdot\!\mathbf{F})$
 vanishes near the saddle ridge, so it drives the path most of the way
-to the MEP cheaply but plateaus before pinpointing the TS. Pair it with
-`pvre` as a second leg for a smooth-then-sharp schedule —
-`examples/configs/muller_brown.yaml` ships this pattern and is ~3.5×
-faster than single-leg `pvre`. See [Advanced](advanced.md) for the
-multi-leg recipe.
+to the MEP cheaply but plateaus before pinpointing the TS. Pair it
+with `pvre` as a second leg for a smooth-then-sharp schedule — see
+`examples/configs/lj13_pvre_two_stage.yaml` for a worked example and
+[Advanced](advanced.md) for the multi-leg recipe and trade-off
+discussion.
 
 ### `pvre_huber`
 
@@ -162,7 +162,7 @@ For a typical reaction:
 | What you want | Loss |
 | --- | --- |
 | Resolve atom clashes (pre-step) | `geodesic` with `potential_params.name: repel` |
-| Find the minimum-energy path | `pvre`, or a `pvre_squared → pvre` schedule for ~3.5× speedup (see `examples/configs/muller_brown.yaml`) |
+| Find the minimum-energy path | `pvre` (shipped default in `muller_brown.yaml` / `lj13.yaml`), or a `pvre_squared → pvre` schedule when `pvre` integrator cost dominates (see `examples/configs/lj13_pvre_two_stage.yaml` and [Advanced](advanced.md)) |
 | Same as above in one leg (no warm-up/fine-tune split) | `pvre_huber` with a per-system `delta` |
 | Find the path *and* keep it short | combine pVRE + VRE with scales (see `examples/configs/loss_example.yaml`) |
 | Maximize the TS energy | apply `E_mean` as a TS-region loss (see [Advanced](advanced.md)) |

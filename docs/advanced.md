@@ -46,7 +46,7 @@ instance.
 
 ### Smooth-then-sharp loss schedule (`pvre_squared → pvre`)
 
-The other canonical multi-leg pattern uses two losses with the same
+A canonical multi-leg pattern uses two losses with the same
 saddle-point physics but different optimization dynamics:
 
 - **`pvre_squared`** has a $C^\infty$-smooth integrand, so adaptive
@@ -58,56 +58,33 @@ saddle-point physics but different optimization dynamics:
 - **`pvre`**'s sign-driven gradient keeps pushing once warm-started,
   snapping the path onto the saddle in a small number of iterations.
 
-`examples/configs/muller_brown.yaml` ships this schedule and is ~3.5×
-faster than the equivalent single-leg `pvre` config with marginally
-better TS recovery. The Stage-2 learning rate is typically ~1/10 of a
-single-leg `pvre` rate because the path is already close — Adam's small
-steps refine more precisely than they recover. Stage-1 threshold
-follows the [convergence recipe](convergence.md) on the warm-up's own
-gradient scale (initial $g_\infty / \sim\!30$).
+`examples/configs/lj13_pvre_two_stage.yaml` is a worked two-stage
+example you can use as a template. The current shipped
+`muller_brown.yaml` and `lj13.yaml` use a different design point —
+**single-stage pvre on a small MLP (n_embed=4, depth=2) with a
+deterministic patience=1 trigger**. That recipe is described in
+[Convergence](convergence.md) and gives consistent wall + path quality
+across seeds with the strict `atol/threshold = 0.1` noise-floor rule.
 
-`examples/configs/lj13.yaml` ships the same schedule on a 39-dim
-atomistic system (13-atom Lennard-Jones cluster, permutation/inversion
-saddle). On this system the two-stage benefit shows up in path
-geometry: across three seeds, the perpendicular force at the saddle
-$|F_\perp|_\mathrm{TS}$ drops from ~0.22 (single-stage `pvre_squared`
-at 600 iters) to ~0.0016 (two-stage with threshold-driven exit and
-the (8,6) MLP), while the energy barrier is reached by either
-schedule to within 0.04%. The `pvre` fine-tune is what tightens the
-path geometry; running `pvre_squared` longer is no substitute.
-Learning rates are 10× lower than Müller–Brown's because LJ-reduced-
-units gradients are O(1) rather than O(1e4) (we measured: lr=1e-2 on
-LJ-13 stage 1 blows up immediately, |g|_∞ jumps from 6.2e+2 to 1.5e+4
-at iter 5, and the threshold never fires). Stage-1 threshold is set
-unusually low (`1.0` on an initial $g_\infty$ of ~6.2e+2) because
-pvre_squared on this system overshoots the saddle ridge and
-oscillates rather than converging monotonically — see
-[convergence](convergence.md) for the empirical derivation. With
-those thresholds the example runs in ~110 s on a single A100 and
-ends with tighter path geometry than the unbounded run.
+When to use which design:
 
-The MLP size (`n_embed=8, depth=6`, ~400k params) was chosen from a
-10-config sweep across (n_embed, depth) ∈ {1,2,4,8,16} × {2,4,6}
-with the threshold-driven schedule and 3-seed validation on the
-five fully-converged candidates. Two effects drove the final pick:
-
-- **Depth=4 has high seed-to-seed variance.** Stage 2 with depth-4
-  MLPs lands in different basins across seeds — (8,4) seed-range
-  $|F_\perp|_\mathrm{TS} \in [0.006, 0.031]$ and (16,4) range
-  $[0.002, 0.041]$. Depth=6 removes that variance: (8,6) range is
-  $[0.0016, 0.0018]$, (4,6) range $[0.0024, 0.0082]$.
-- **Larger MLPs are *faster* per stage-2 step.** A more expressive
-  MLP fits a smoother path, so adaptive Gauss–Kronrod quadrature
-  uses ~3× fewer evaluations per integration call. (8,6)'s mean
-  wall (108s) beats (8,4)'s (128s) despite having 2× the
-  parameters.
-
-Smallest-sufficient-MLP regime: width≥4 OR (width=2 with depth≥4)
-gives the correct barrier; (1,2), (2,2), and (2,4) underconverge.
-The smallest config that reaches $|F_\perp|_\mathrm{TS}<0.01$ is
-(4,2) at 6.4k params (vs (8,6)'s 400k) but it's slower (161s) and
-relies on stage 2 doing all the geometry work since stage 1 never
-hits its threshold.
+- **Single-stage pvre + n4d2** (the shipped default) — easiest to
+  reason about, deterministic stop, no mid-run loss switch. Best for
+  callers that just want a path and don't need the very last decade
+  of TS-force quality.
+- **Two-stage pvre² → pvre** — wins when the per-iter integrator cost
+  of `pvre` dominates and `pvre_squared`'s 5× cheaper integration can
+  amortize a warm-up. Tune the stage-1 threshold from a pilot of the
+  warm-up's own gradient scale (typically ~$g_\infty / 30$). If
+  stage-1's $|F_\perp|_\mathrm{TS}$ is non-monotonic (LJ-13 case
+  observed: descends then oscillates back up 44×), set stage-1
+  threshold *before* the rebound; otherwise the path arrives at stage
+  2 worse than where it bottomed.
+- **Two-stage pvre² → pseudo-Huber δ** — useful when stage-2 needs to
+  bridge between the smooth `pvre_squared` warm-up and the sharp
+  `pvre` ridge without picking up `pvre`'s integrator cost; small δ
+  (≤ 0.01 on chemistry units) keeps the gradient sign-driven near the
+  saddle while staying smooth elsewhere.
 
 ## Schedulers
 

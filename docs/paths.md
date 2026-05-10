@@ -45,10 +45,13 @@ of what the MLP outputs. The MLP only ever moves intermediate points.
 | `depth` | `2` | Number of layers. `depth=2` is one input layer + one output layer (no hidden). `depth=4` adds two hidden layers. |
 | `activation` | `"gelu"` | Any nonlinearity in `torch.nn` (case-insensitive). |
 
-For simple reactions, `depth: 2, n_embed: 1` is enough. For more
-complicated reactions (concerted multi-bond rearrangements, large
-configurational changes), bump `depth` up; `depth: 4, n_embed: 8` is
-what the `wolfe.yaml` and `loss_example.yaml` configs use.
+For simple reactions, `depth: 2, n_embed: 1` is enough.
+`muller_brown.yaml` and `lj13.yaml` use `depth: 2, n_embed: 4` —
+empirically the smallest stable capacity at the shipped lr=1e-3 +
+patience=1 trigger across 3 seeds. For more complicated reactions
+(concerted multi-bond rearrangements, large configurational changes),
+bump `depth` up; `depth: 4, n_embed: 8` is what the `wolfe.yaml` and
+`loss_example.yaml` configs use.
 
 ## Adding your own path representation
 
