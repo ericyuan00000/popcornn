@@ -119,7 +119,7 @@ initialization_params:
   images: configs/rxn0003.xyz
   path_params:
     name: mlp
-    n_embed: 1
+    n_embed: 4
     depth: 2
     activation: gelu
   num_record_points: 101
@@ -131,10 +131,14 @@ optimization_params:
       name: repel
     integrator_params:
       path_integrand_names: geodesic
+      rtol: 1.0e-1
+      atol: 1.0e-4
     optimizer_params:
       optimizer:
         name: adam
-        lr: 1.0e-1
+        lr: 1.0e-3
+      threshold: 1.0e-3
+      patience: 1
     num_optimizer_iterations: 1000
 
   - potential_params:
@@ -153,5 +157,9 @@ optimization_params:
     num_optimizer_iterations: 1000
 ```
 
-Two legs: a fast repulsive geodesic pre-step (no MLIP, no convergence
-trigger), then the UMA-driven step that does the real work.
+Two legs: a fast repulsive geodesic warm-up that triggers when its own
+$g_\infty$ drops below `1.0e-3` (a clash-resolution check, not a
+chemistry one), then the UMA-driven step that does the saddle search.
+Both legs use `n_embed: 4, depth: 2` and `lr: 1.0e-3`; the warm-up's
+`(rtol, atol, threshold) = (1e-1, 1e-4, 1e-3)` is the same triple as
+`lj13.yaml`.

@@ -50,8 +50,9 @@ The shipped recipes pair `threshold` with `atol` so the gradient noise
 floor sits an order of magnitude below the trigger:
 
 - `wolfe.yaml` — `threshold: 1.0`.
-- `rxn0003.yaml` — two-stage repel warm-up + UMA stage with
-  `threshold: 1.0e-1`.
+- `rxn0003.yaml` — two-stage. Warm-up (repel + geodesic) uses the
+  `lj13.yaml` triple `(rtol, atol, threshold) = (1e-1, 1e-4, 1e-3)`
+  with `patience: 1`; UMA stage uses `threshold: 1.0e-1`.
 - `muller_brown.yaml` — single-stage pvre + n4d2 + lr=1e-3 +
   `(rtol, atol, threshold) = (1e-1, 1e-2, 1e-1)` + `patience: 1`.
   `atol/threshold = 0.1` enforces the strict `/10` noise-floor rule

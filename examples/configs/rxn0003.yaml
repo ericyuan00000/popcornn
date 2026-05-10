@@ -1,23 +1,35 @@
+# rxn0003 (organic 13-atom reaction, UMA-s-1p1/omol potential).
+#
+# Two legs:
+#   1. geodesic + repel warm-up — clash resolution; lj13 recipe transferred
+#      verbatim (n4d2, lr=1e-3, rtol=1e-1, atol=1e-4, thr=1e-3, patience=1).
+#      Validated 3/3 seeds reach dense barrier < 3.6 eV in mean ~4.4 s wall
+#      (max ~5.5 s, iter 102–204) — well under the post-saddle target ~1 eV
+#      that stage 2 is responsible for hitting.
+#   2. UMA + pvre saddle search — settings unchanged from prior recipe.
 initialization_params:
   images: configs/rxn0003.xyz
-  path_params: 
+  path_params:
     name: mlp
-    n_embed: 1
+    n_embed: 4
     depth: 2
     activation: gelu
   num_record_points: 101
-  # output_dir: output
   device: cuda
   seed: 0
-optimization_params:  
+optimization_params:
   - potential_params:
       name: repel
-    integrator_params: 
+    integrator_params:
       path_integrand_names: geodesic
+      rtol: 1.0e-1
+      atol: 1.0e-4
     optimizer_params:
       optimizer:
         name: adam
-        lr: 1.0e-1
+        lr: 1.0e-3
+      threshold: 1.0e-3
+      patience: 1
     num_optimizer_iterations: 1000
   - potential_params:
       name: uma
