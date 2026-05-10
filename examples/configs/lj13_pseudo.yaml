@@ -1,0 +1,35 @@
+# Single-stage LJ-13 using pseudo-Huber δ=1e-2.
+# Mirrors examples/configs/muller_brown_pseudo.yaml with δ rescaled by
+# 1/100 and the convergence threshold rescaled by 1/100 (LJ-13 reduced
+# units; barrier ~1 vs MB's ~100). Comparison baseline against the
+# two-stage pvre² → pseudo-Huber recipe in lj13.yaml.
+initialization_params:
+  images: examples/configs/lj13.xyz
+  path_params:
+    name: mlp
+    n_embed: 8
+    depth: 4
+    activation: gelu
+  num_record_points: 101
+  device: cuda
+  seed: 0
+optimization_params:
+  - potential_params:
+      name: lennard_jones
+      epsilon: 1.0
+      sigma: 1.0
+      cutoff: 3.0
+    integrator_params:
+      path_integrand_names: pvre_pseudo_huber
+      path_integrand_kwargs:
+        pvre_pseudo_huber:
+          delta: 1.0e-2
+      rtol: 1.0e-2
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-3
+      threshold: 1.0e-3
+      patience: 10
+      find_ts: false
+    num_optimizer_iterations: 2000
