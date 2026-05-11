@@ -201,7 +201,13 @@ class PathIntegrator:
         t_init_0d = torch.as_tensor(t_init).squeeze()
         t_final_0d = torch.as_tensor(t_final).squeeze()
 
-        params = list(path.parameters())
+        # Filter out frozen params (requires_grad=False). When a potential
+        # is attached via set_potential, it's registered as an nn.Module
+        # submodule of the path, so its params appear in path.parameters().
+        # Potentials that freeze their weights (e.g. NewtonNet's
+        # `model.requires_grad_(False)`) would otherwise trip
+        # autograd.grad's "differentiated Tensors does not require grad".
+        params = [p for p in path.parameters() if p.requires_grad]
         sizes = [p.numel() for p in params]
 
         # Side-buffer for transition-state-finding samples. Each entry is a
