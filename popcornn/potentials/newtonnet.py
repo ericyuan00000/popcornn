@@ -28,14 +28,8 @@ class NewtonNetPotential(BasePotential):
         self.n_eval = 0
 
 
-    @torch.enable_grad()
     def forward(self, positions):
         data = self.data_formatter(positions)
-        # GradientForceOutput uses internal autograd over `disp` (edge
-        # displacement vectors). RadiusGraph computes disp from pos so
-        # it arrives as a non-leaf, and the model's `disp.requires_grad
-        # = True` only works on leaves. Detach to a fresh leaf here.
-        data.disp = data.disp.detach().requires_grad_(True)
         pred = self.model(data.z, data.disp, data.edge_index, data.batch)
         self.n_eval += 1
         energies = pred.energy.unsqueeze(-1)
