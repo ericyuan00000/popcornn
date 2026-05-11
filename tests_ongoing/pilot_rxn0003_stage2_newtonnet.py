@@ -101,8 +101,9 @@ def setup_newtonnet(mep):
                          device=mep.device, dtype=mep.dtype)
 
 
-@torch.no_grad()
 def probe(path, pot, M):
+    # No @torch.no_grad() — NewtonNet's GradientForceOutput uses internal
+    # autograd over disp, which silently fails under a no_grad context.
     device = path.initial_position.device
     dtype = path.initial_position.dtype
     times = torch.linspace(0.0, 1.0, M, device=device, dtype=dtype).unsqueeze(-1)
