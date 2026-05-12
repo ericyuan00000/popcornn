@@ -146,18 +146,10 @@ Available scheduler types:
 
 ## Transition-state losses
 
-Two extra loss types apply specifically at or near the predicted
-transition state:
-
-- `ts_time_loss_names` / `ts_time_loss_scales` — applied at a single
-  time, the predicted TS time.
-- `ts_region_loss_names` / `ts_region_loss_scales` — applied across a
-  small time window around the predicted TS.
-
-These are useful for, e.g., minimizing the force magnitude at the TS
-(`F_mag` as a TS-time loss) or maximizing the TS energy (`E_mean` as
-a TS-region loss). Each can also be scheduled with
-`ts_time_loss_schedulers` / `ts_region_loss_schedulers`.
+`ts_time_loss_names` / `ts_time_loss_scales` apply an extra loss at
+the predicted TS time, useful e.g. for minimizing the force magnitude
+at the TS (`F_mag` as a TS-time loss). The scales can be scheduled
+with `ts_time_loss_schedulers`.
 
 The TS itself is picked by `BasePath.ts_search`: an `argmax` over the
 per-quadrature-point energy cache that the integrator already collects

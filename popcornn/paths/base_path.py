@@ -84,8 +84,8 @@ class BasePath(torch.nn.Module):
         find_ts : bool, default=True
             Whether the optimization loop should run ``ts_search`` each
             iteration and populate ``ts_time`` / ``ts_energy`` /
-            ``ts_force`` / ``ts_region``. Set False to skip the (cheap)
-            argmax-on-samples step entirely.
+            ``ts_force``. Set False to skip the (cheap) argmax-on-samples
+            step entirely.
         """
         super().__init__()
         self.neval = 0
@@ -110,7 +110,6 @@ class BasePath(torch.nn.Module):
             [[1]], dtype=self.dtype, device=self.device
         )
         self.ts_time = None
-        self.ts_region = None
 
     def set_potential(
             self,
@@ -329,13 +328,11 @@ class BasePath(torch.nn.Module):
         Notes
         -----
         Sets ``self.ts_time``, ``self.ts_energy``, ``self.ts_force``,
-        ``self.ts_force_mag``, and ``self.ts_region`` (a small time
-        window around ``ts_time`` used by the TS-region loss).
+        and ``self.ts_force_mag``.
         """
         time = samples.time
         energies = samples.energies.flatten()
         forces = samples.forces
-        N = energies.shape[0]
 
         pick = int(torch.argmax(energies).item())
 
@@ -354,14 +351,3 @@ class BasePath(torch.nn.Module):
             self.ts_energy = ts_output.energies
             self.ts_force = ts_output.forces
             self.ts_force_mag = torch.linalg.norm(self.ts_force, dim=-1)
-
-        # Window of ±4 quadrature samples around the picked TS, sampled
-        # at 11 points — used by the TS-region loss when configured.
-        i_lo = max(0, pick - 4)
-        i_hi = min(N - 1, pick + 4)
-        self.ts_region = torch.linspace(
-            time[i_lo].to(device=self.device, dtype=self.dtype),
-            time[i_hi].to(device=self.device, dtype=self.dtype),
-            11,
-            device=self.device,
-        )

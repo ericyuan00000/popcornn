@@ -91,7 +91,6 @@ and `task_name`; MACE needs a checkpoint path). The
 | `path_integrand_schedulers` | `dict` | `None` | Schedulers on `path_integrand_scales`. Useful for ramping a geodesic term down as a pVRE term ramps up. See [Advanced](advanced.md). |
 | `find_ts` | `bool` or `None` | `None` (auto) | Force-enable / force-disable transition-state extraction. `None` inherits from the path's own flag (default `True`). When active, `BasePath.ts_search` runs every iteration on the integrator's sample cache and `ts_image` is returned by `optimize_path`. |
 | `ts_time_loss_names`, `ts_time_loss_scales`, `ts_time_loss_schedulers` | various | `None` | Optional losses applied at the predicted transition-state time. See [Advanced](advanced.md). |
-| `ts_region_loss_names`, `ts_region_loss_scales`, `ts_region_loss_schedulers` | various | `None` | Same, but applied across a small time window around the predicted TS. |
 
 #### Scheduler dict
 
