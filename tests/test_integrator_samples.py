@@ -73,3 +73,42 @@ def test_save_samples_off_yields_none(muller_brown_setup):
 
     out = integrator.integrate_path(path)
     assert out.samples is None
+
+
+def test_sticky_max_batch_after_oom_in_integrate_path(muller_brown_setup):
+    """If torchpathint reports a shrunken max_batch, ``PathIntegrator``
+    stores it so the next ``integrate_path`` starts at the learned size
+    rather than re-discovering it from scratch.
+
+    Simulated by monkeypatching ``path_integral`` (we can't provoke a real
+    CUDA OOM in a unit test); the mechanics on top of torchpathint are
+    what's under test here, not the shrinker itself.
+    """
+    path, device, dtype = muller_brown_setup
+    integrator = PathIntegrator(
+        method='gk21',
+        path_integrand_names='pvre',
+        rtol=1e-2, atol=1e-2,
+        device=device, dtype=dtype,
+    )
+
+    # Confirm normal-path behavior leaves max_batch == None when no OOM.
+    out = integrator.integrate_path(path)
+    assert integrator.max_batch == out.max_batch  # both None after a clean run
+
+    # Now simulate torchpathint reporting a learned, shrunken value.
+    import popcornn.tools.integrator as integ_mod
+
+    real_pi = integ_mod.path_integral
+
+    def fake_pi(*args, **kwargs):
+        result = real_pi(*args, **kwargs)
+        result.max_batch = 7  # pretend the shrinker landed at 7
+        return result
+
+    integ_mod.path_integral = fake_pi
+    try:
+        integrator.integrate_path(path)
+    finally:
+        integ_mod.path_integral = real_pi
+    assert integrator.max_batch == 7
