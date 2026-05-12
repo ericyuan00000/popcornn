@@ -172,7 +172,7 @@ class Popcornn:
         if len(images) > 2:
             self.path = initialize_path(
                 path=self.path, 
-                times=torch.linspace(self.path.t_init.item(), self.path.t_final.item(), len(self.images), device=self.device), 
+                times=torch.linspace(self.path.t_init.item(), self.path.t_final.item(), len(self.images), device=self.device, dtype=self.dtype),
                 init_points=self.images.positions,
             )
 
