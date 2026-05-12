@@ -1,18 +1,14 @@
-# Single-stage Müller-Brown: pvre on a small MLP (n_embed=4, depth=2).
+# Single-stage Müller-Brown: pseudo-Huber δ=1.0 on a small MLP (n4d2).
 #
-# Recipe picked from a 3-seed sweep over (capacity, lr, rtol, atol, thr)
-# at patience=1 with the |F|_2 < 1 stop criterion at the parabolic-refined
-# TS argmax. n4d2 is the smallest capacity that holds F_2<1 across all
-# 3 seeds without late-iter rebound; lr=1e-3 keeps the |g|_∞ trajectory
-# monotone enough that a round-decade threshold + patience=1 fires at the
-# right time.
+# Universal on-rule pair (atol = thr/10) at MB's scale: thr=1e-1 with
+# atol=1e-2. Matches the lj13.yaml / gg3.yaml ratio (1e-4 / 1e-3 = 0.1)
+# at MB's higher force scale (typical |F|·|v| ~ 100 vs chemistry ~ 1).
 #
-# atol=1e-2, threshold=1e-1: atol/thr = 0.1 enforces the strict /10
-# noise-floor rule (mirrors lj13.yaml, which uses atol/thr = 1e-4/1e-3
-# = 0.1 for the same reason). Mean wall ~38s across 3 seeds, max F_2 at
-# stop ≈ 0.62 (1.6× headroom under target=1). Cheaper than the
-# both-tightened (atol=thr=1e-2) variant because thr=1e-1 fires earlier
-# in the descent.
+# δ scaling: chemistry systems use δ=0.1 (typical |s| ~ 1); MB needs δ
+# scaled up 10× to match its higher force scale. Validated 3-seed (2026-05-12,
+# off-rule atol=1e-1): all 3 PASS, mean wall ~33 s, max F_2 ≈ 0.6 under
+# the |F|_2 < 1 target. δ=10 falls into vanishing-gradient regime;
+# δ=0.1 explodes. See project_popcornn_mb_two_stage_caveats.
 initialization_params:
   images: [[-0.558, 1.442], [0.623, 0.028]]
   path_params:
@@ -24,7 +20,10 @@ optimization_params:
   - potential_params:
       name: muller_brown
     integrator_params:
-      path_integrand_names: pvre
+      path_integrand_names: pvre_pseudo_huber
+      path_integrand_kwargs:
+        pvre_pseudo_huber:
+          delta: 1.0
       rtol: 1.0e-1
       atol: 1.0e-2
     optimizer_params:
@@ -33,4 +32,4 @@ optimization_params:
         lr: 1.0e-3
       threshold: 1.0e-1
       patience: 1
-    num_optimizer_iterations: 1000   # typical converge ~210–500
+    num_optimizer_iterations: 1000

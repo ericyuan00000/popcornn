@@ -1,25 +1,17 @@
-# Single-stage LJ-13: pvre on a small MLP (n_embed=4, depth=2).
-# Mirrors examples/configs/muller_brown.yaml with tols + threshold
-# rescaled for LJ-13's reduced-units barrier (~1 vs MB's ~100):
+# Single-stage LJ-13: pseudo-Huber δ=0.1 on a small MLP (n_embed=4, depth=2).
 #   - rtol: 1.0e-1                 (relative — barrier-invariant)
-#   - atol: 1.0e-1 → 1.0e-4        (drops noise floor; needs both
-#                                   strict /10 headroom over thr)
-#   - threshold: 1.0e-1 → 1.0e-3   (thr/10 below atol-set noise floor)
+#   - atol: 1.0e-4                 (= thr/10, on-rule per atol_threshold_rule
+#                                   project memory; the UMA chemistry default)
+#   - threshold: 1.0e-3            (per-atom fmax target: < 0.05)
 #
-# Recipe picked from a 3-seed sweep at the |F|_2 < 0.05 quality target.
-# The strict /10 noise-floor rule (atol_threshold_rule project memory) is
-# enforced — yields 6.8× F_2 headroom (max stop F_2 = 0.0073) and stops
-# all 3 seeds in mean ~76 s wall, max ~92 s, well before the late-iter
-# rebound that hits seed 0 around iter 1900 if you let it run to plateau.
+# Integrand: pvre_pseudo_huber with δ=0.1 — same loss family shipped on
+# rxn0003 NewtonNet. Universal on-rule (atol=thr/10) and UMA-default
+# (atol=1e-4, thr=1e-3) per the 2026-05-12 "ship UMA setting to NewtonNet
+# and LJ13" directive.
 #
 # Capacity: n_embed=4, depth=2 → 6435 params (output 39-D × 4-wide
 # hidden). The previous shipped n8d4 was 208k params — vastly
 # over-parameterized for LJ-13's smooth landscape.
-#
-# Looser variants (cheaper but less robust): atol=1e-3 + thr=1e-2 is
-# ~41 s mean wall but only 1.25× F_2 headroom (max stop F_2 = 0.040
-# vs target 0.05). Use for time-pressed runs; default to this strict
-# recipe for predictability.
 #
 # find_ts: false is a mandatory workaround — integrator save_samples
 # crashes when find_ts=True on LJ-13. The TS argmax for path-quality
@@ -41,7 +33,10 @@ optimization_params:
       sigma: 1.0
       cutoff: 3.0
     integrator_params:
-      path_integrand_names: pvre
+      path_integrand_names: pvre_pseudo_huber
+      path_integrand_kwargs:
+        pvre_pseudo_huber:
+          delta: 0.1
       rtol: 1.0e-1
       atol: 1.0e-4
     optimizer_params:
@@ -51,4 +46,4 @@ optimization_params:
       threshold: 1.0e-3
       patience: 1
       find_ts: false
-    num_optimizer_iterations: 1000   # typical converge ~180–245
+    num_optimizer_iterations: 1000

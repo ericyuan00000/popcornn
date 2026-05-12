@@ -1,0 +1,56 @@
+# gg3 (organic 13-atom reaction; the system formerly known as rxn0003).
+# UMA-s-1p1/omol potential.
+#
+# Two legs, both on-rule (atol = thr/10):
+#   1. geodesic + repel warm-up — clash resolution. n4d2, lr=1e-3,
+#      (rtol, atol, thr) = (1e-1, 1e-4, 1e-3), patience=1. Validated 3/3
+#      seeds reach dense barrier < 3.6 eV in mean ~4.4 s wall (max ~5.5 s,
+#      iter 102–204) — well under the post-saddle target ~1 eV that
+#      stage 2 is responsible for hitting.
+#   2. UMA + pseudo-Huber(δ=0.1) saddle search. atol=1e-4, thr=1e-3 — the
+#      universal on-rule chemistry pair (same numbers as NewtonNet rxn0003
+#      and lj13.yaml; see feedback_atol_thr_on_rule_universal). UMA needed
+#      the tighter atol because |g|_∞ trigger has more seed variance —
+#      the off-rule pair caught seed 0 before fmax descended below 0.05.
+initialization_params:
+  images: examples/configs/gg3.xyz
+  path_params:
+    name: mlp
+    n_embed: 4
+    depth: 2
+    activation: gelu
+  num_record_points: 101
+  device: cuda
+  seed: 0
+optimization_params:
+  - potential_params:
+      name: repel
+    integrator_params:
+      path_integrand_names: geodesic
+      rtol: 1.0e-1
+      atol: 1.0e-4
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-3
+      threshold: 1.0e-3
+      patience: 1
+    num_optimizer_iterations: 1000
+  - potential_params:
+      name: uma
+      model_name: uma-s-1p1
+      task_name: omol
+    integrator_params:
+      path_integrand_names: pvre_pseudo_huber
+      path_integrand_kwargs:
+        pvre_pseudo_huber:
+          delta: 0.1
+      rtol: 1.0e-1
+      atol: 1.0e-4
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 1.0e-3
+      threshold: 1.0e-3
+      patience: 1
+    num_optimizer_iterations: 1000
