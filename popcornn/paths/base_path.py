@@ -84,8 +84,8 @@ class BasePath(torch.nn.Module):
         find_ts : bool, default=True
             Whether the optimization loop should run ``ts_search`` each
             iteration and populate ``ts_time`` / ``ts_energy`` /
-            ``ts_force``. Set False to skip the (cheap) argmax-on-samples
-            step entirely.
+            ``ts_force`` / ``ts_force_mag``. Set False to skip the
+            sign-change + fresh-eval step entirely.
         """
         super().__init__()
         self.neval = 0
@@ -325,7 +325,9 @@ class BasePath(torch.nn.Module):
         Notes
         -----
         Sets ``self.ts_time``, ``self.ts_energy``, ``self.ts_force``,
-        and ``self.ts_force_mag``.
+        and ``self.ts_force_mag`` (per-atom fmax = ``max_i ‖F_i‖_2``
+        for atomistic systems; vector L2 norm for toy potentials with
+        no ``n_atoms`` set).
         """
         time = samples.time
         energies = samples.energies.flatten()
@@ -382,4 +384,19 @@ class BasePath(torch.nn.Module):
         )
         self.ts_energy = ts_output.energies
         self.ts_force = ts_output.forces
-        self.ts_force_mag = torch.linalg.norm(self.ts_force, dim=-1)
+        self.ts_force_mag = self._ts_fmax(self.ts_force)
+
+    def _ts_fmax(self, force: torch.Tensor) -> torch.Tensor:
+        """Per-atom fmax for atomistic systems; vector L2 norm otherwise.
+
+        Atomistic force is laid out as ``[..., 3 * n_atoms]``; reshape
+        to ``[..., n_atoms, 3]``, take the L2 norm over the xyz axis,
+        and reduce to the per-atom maximum. Toy potentials (no
+        ``n_atoms`` on the potential, e.g. Muller-Brown) get a plain
+        vector L2 norm.
+        """
+        f = force.reshape(-1)
+        n_atoms = getattr(self.potential, 'n_atoms', None) if self.potential is not None else None
+        if n_atoms is None:
+            return torch.linalg.norm(f)
+        return torch.linalg.norm(f.reshape(n_atoms, 3), dim=-1).max()
