@@ -37,9 +37,6 @@ class PathOptimizer():
             ts_time_loss_names=None,
             ts_time_loss_scales=torch.ones(1),
             ts_time_loss_schedulers=None,
-            ts_region_loss_names=None,
-            ts_region_loss_scales=torch.ones(1),
-            ts_region_loss_schedulers=None,
             threshold=None,
             patience=5,
             device='cpu',
@@ -63,8 +60,6 @@ class PathOptimizer():
             Schedules for per-integrand-term scales.
         ts_time_loss_names, ts_time_loss_scales, ts_time_loss_schedulers : optional
             Loss applied at the predicted TS time.
-        ts_region_loss_names, ts_region_loss_scales, ts_region_loss_schedulers : optional
-            Loss applied across a small window around the predicted TS.
         threshold : float, optional
             Convergence trigger on ``‖∫∇L dt‖_∞``. ``None`` disables.
         patience : int, default=5
@@ -86,8 +81,7 @@ class PathOptimizer():
 
         ####  Initialize transition state loss information  #####
         self.has_ts_time_loss = ts_time_loss_names is not None
-        self.has_ts_region_loss = ts_region_loss_names is not None
-        self.has_ts_loss = self.has_ts_time_loss or self.has_ts_region_loss
+        self.has_ts_loss = self.has_ts_time_loss
         if self.has_ts_loss:
             if self.find_ts is None or self.find_ts:
                 self.find_ts = True
@@ -97,7 +91,7 @@ class PathOptimizer():
             # No explicit override and no TS-loss to force the issue —
             # let the path decide. BasePath's own default is True.
             self.find_ts = path.find_ts
-        
+
         self.ts_time_loss_names = ts_time_loss_names
         self.ts_time_loss_scales = ts_time_loss_scales
         if self.has_ts_time_loss:
@@ -105,17 +99,9 @@ class PathOptimizer():
                 self.ts_time_loss_names, self.ts_time_loss_scales
             )
 
-        self.ts_region_loss_names = ts_region_loss_names
-        self.ts_region_loss_scales = ts_region_loss_scales
-        if self.has_ts_region_loss:
-            self.ts_region_terms = build_integrand_terms(
-                self.ts_region_loss_names, self.ts_region_loss_scales
-            )
-
         #####  Initialize schedulers  #####
         self.integrand_schedulers = get_schedulers(path_integrand_schedulers)
         self.ts_time_loss_schedulers = get_schedulers(ts_time_loss_schedulers)
-        self.ts_region_loss_schedulers = get_schedulers(ts_region_loss_schedulers)
         
         #####  Initialize optimizer  #####
         self.path = path
@@ -173,8 +159,8 @@ class PathOptimizer():
         1. Read the current scheduled values for all per-loss scales.
         2. Hand the path + loss to ``integrator.integrate_path``,
            which scatters ``∂L/∂θ`` into ``path.parameters().grad``.
-        3. (Currently no-op) Add gradients from any TS-time / TS-region
-           losses.
+        3. Run ``ts_search`` on the integrator's sample cache, then add
+           gradients from any TS-time loss.
         4. Step Adam, all schedulers, and the LR scheduler.
         5. Update the convergence-trigger counter.
 
@@ -197,9 +183,6 @@ class PathOptimizer():
             ts_time_loss_scales = {
                 name : schd.get_value() for name, schd in self.ts_time_loss_schedulers.items()
             }
-            ts_region_loss_scales = {
-                name : schd.get_value() for name, schd in self.ts_region_loss_schedulers.items()
-            }
         integral_output = integrator.integrate_path(
             path,
             integrand_scales=integrand_scales,
@@ -210,16 +193,12 @@ class PathOptimizer():
         # no .backward() call here.
 
         #####  Transition State  #####
-        # ts_search reads the per-quadrature-point (t, E, F) cache that the
-        # integrator collected during the same forward pass that produced
-        # the gradient — zero extra path evaluations. evaluate_ts=False here
-        # because the TS-time / TS-region loss block below already
-        # re-evaluates the path at path.ts_time when those losses are on.
+        # ts_search reads the per-quadrature-point (t, E, dE/dt) cache the
+        # integrator collected during the gradient pass, brackets the
+        # interior sign change of dE/dt, linearly interpolates t_TS, and
+        # does one fresh path.forward at t_TS to get model-truth E/F.
         if self.find_ts and integral_output.samples is not None:
-            path.ts_search(
-                integral_output.samples,
-                evaluate_ts=False,
-            )
+            path.ts_search(integral_output.samples)
 
         # Evaluate transition state losses
         if self.find_ts and path.ts_time is not None:
@@ -231,14 +210,6 @@ class PathOptimizer():
                     path,
                 )
                 ts_time_loss[:, 0].backward()
-            if self.has_ts_region_loss:
-                _update_term_scales(self.ts_region_terms, ts_region_loss_scales)
-                ts_region_loss, _ = evaluate_integrand_sum(
-                    self.ts_region_terms,
-                    path.ts_region[:, None],
-                    path,
-                )
-                ts_region_loss[:, 0].backward()
 
         #####  Update Optimization  #####
         # Path update step
@@ -249,8 +220,6 @@ class PathOptimizer():
             sched.step()
         if self.has_ts_loss:
             for name, sched in self.ts_time_loss_schedulers.items():
-                sched.step() 
-            for name, sched in self.ts_region_loss_schedulers.items():
                 sched.step()
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()

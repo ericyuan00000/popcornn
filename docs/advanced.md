@@ -146,24 +146,21 @@ Available scheduler types:
 
 ## Transition-state losses
 
-Two extra loss types apply specifically at or near the predicted
-transition state:
+`ts_time_loss_names` / `ts_time_loss_scales` apply an extra loss at
+the predicted TS time, useful e.g. for minimizing the force magnitude
+at the TS (`F_mag` as a TS-time loss). The scales can be scheduled
+with `ts_time_loss_schedulers`.
 
-- `ts_time_loss_names` / `ts_time_loss_scales` — applied at a single
-  time, the predicted TS time.
-- `ts_region_loss_names` / `ts_region_loss_scales` — applied across a
-  small time window around the predicted TS.
-
-These are useful for, e.g., minimizing the force magnitude at the TS
-(`F_mag` as a TS-time loss) or maximizing the TS energy (`E_mean` as
-a TS-region loss). Each can also be scheduled with
-`ts_time_loss_schedulers` / `ts_region_loss_schedulers`.
-
-The TS itself is picked by `BasePath.ts_search`: an `argmax` over the
-per-quadrature-point energy cache that the integrator already collects
-during the gradient pass. There is no separate TS optimization — the
-saddle's resolution is set by the integrator's `rtol` / `atol`. Tighten
-those if `ts_image` looks coarse.
+The TS itself is picked by `BasePath.ts_search`: find the interior
+sign change of `dE/dt` on the per-quadrature-point sample cache the
+integrator already collects during the gradient pass, linearly
+interpolate `t` at the zero crossing, and re-evaluate the path once
+at that time to get model-truth `E` / `F`. Endpoints are excluded
+because the reactant/product minima sit there with `dE/dt ≈ 0`.
+When no interior sign change exists (under-resolved paths, monotone
+profiles), `ts_search` falls back to interior `argmax(E)`. Saddle
+resolution is set by the integrator's `rtol` / `atol`; tighten those
+if the bracketed segment is wide.
 
 ## Logging per-iteration state
 

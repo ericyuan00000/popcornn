@@ -47,9 +47,8 @@ def test_save_samples_aligned_with_quadrature_mesh(muller_brown_setup):
     assert isinstance(out.samples, SamplesCache)
     expected_n = out.t.flatten().shape[0]
     assert out.samples.time.shape == (expected_n,)
-    # forces are flattened atomic dof; for Muller-Brown D = 2.
-    assert out.samples.forces.shape[0] == expected_n
-    assert out.samples.forces.shape[1] == 2
+    # dE/dt is a per-sample scalar.
+    assert out.samples.dEdt.shape == (expected_n,)
     # energies may be shape [N, 1] or [N, K]; just assert leading axis.
     assert out.samples.energies.shape[0] == expected_n
 
@@ -57,9 +56,9 @@ def test_save_samples_aligned_with_quadrature_mesh(muller_brown_setup):
     assert torch.allclose(
         out.samples.time, out.t.flatten().to(out.samples.time.device)
     )
-    # nothing nan / inf — energies and forces actually came from the potential.
+    # nothing nan / inf — energies and dE/dt actually came from the potential.
     assert torch.isfinite(out.samples.energies).all()
-    assert torch.isfinite(out.samples.forces).all()
+    assert torch.isfinite(out.samples.dEdt).all()
 
 
 def test_save_samples_off_yields_none(muller_brown_setup):

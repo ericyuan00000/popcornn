@@ -84,8 +84,8 @@ class BasePath(torch.nn.Module):
         find_ts : bool, default=True
             Whether the optimization loop should run ``ts_search`` each
             iteration and populate ``ts_time`` / ``ts_energy`` /
-            ``ts_force`` / ``ts_region``. Set False to skip the (cheap)
-            argmax-on-samples step entirely.
+            ``ts_force`` / ``ts_force_mag``. Set False to skip the
+            sign-change + fresh-eval step entirely.
         """
         super().__init__()
         self.neval = 0
@@ -110,7 +110,6 @@ class BasePath(torch.nn.Module):
             [[1]], dtype=self.dtype, device=self.device
         )
         self.ts_time = None
-        self.ts_region = None
 
     def set_potential(
             self,
@@ -298,70 +297,106 @@ class BasePath(torch.nn.Module):
     def ts_search(
         self,
         samples: SamplesCache,
-        *,
-        evaluate_ts: bool = False,
     ):
         """
         Locate the predicted transition state on the current path.
 
-        Picks the highest-energy quadrature sample as the TS — a single
-        ``argmax`` over the per-sample ``(time, energies, forces)`` cache
-        already collected by ``PathIntegrator``. No interpolation, no
-        extra path forwards (apart from the optional re-evaluation at
-        the predicted TS time when ``evaluate_ts=True``).
+        Picks the TS as the interior sign change of ``dE/dt`` on the
+        cached quadrature samples, linearly interpolates ``t`` at the
+        zero crossing, and then re-evaluates the path at that time to
+        get model-truth ``ts_energy`` / ``ts_force`` — argmax-E on the
+        same sample mesh overshoots the saddle force by ~6× because the
+        cached F is evaluated at the sample times, not at the true
+        sign-change time.
 
-        On well-resolved adaptive-quadrature paths this matches the
-        previous spline-windowed criterion to ~1e-4 in time and energy
-        at a fraction of the cost; the spline machinery only earned its
-        keep when the quadrature was under-resolved around the saddle,
-        which the integrator's ``rtol``/``atol`` already controls.
+        Falls back to interior ``argmax(E)`` when no interior sign
+        change exists (under-resolved paths, monotone profiles). The
+        endpoints are excluded from both the bracket search and the
+        argmax: paths are parameterized so the reactant/product minima
+        sit at ``t=0`` and ``t=1`` where ``dE/dt`` is also ~0, and
+        picking either of those is never the right call.
 
         Parameters
         ----------
         samples : SamplesCache
-            Per-quadrature-point ``(time, energies, forces)`` from
+            Per-quadrature-point ``(time, energies, dE/dt)`` from
             ``PathIntegrator.integrate_path(save_samples=True)``.
-        evaluate_ts : bool, default=False
-            If True, re-evaluate the path at the predicted TS time to
-            replace the sample-derived ``ts_energy`` / ``ts_force`` with
-            model-truth values. Costs one extra path forward.
 
         Notes
         -----
         Sets ``self.ts_time``, ``self.ts_energy``, ``self.ts_force``,
-        ``self.ts_force_mag``, and ``self.ts_region`` (a small time
-        window around ``ts_time`` used by the TS-region loss).
+        and ``self.ts_force_mag`` (per-atom fmax = ``max_i ‖F_i‖_2``
+        for atomistic systems; vector L2 norm for toy potentials with
+        no ``n_atoms`` set).
         """
         time = samples.time
         energies = samples.energies.flatten()
-        forces = samples.forces
+        dEdt = samples.dEdt
         N = energies.shape[0]
 
-        pick = int(torch.argmax(energies).item())
+        # Interior sign-change brackets. ``dE/dt`` touches zero at the
+        # endpoints (reactant/product minima), so a global sign search
+        # would falsely bracket the first/last segment; restrict to
+        # interior segments [i, i+1] with i ∈ [1, N-3].
+        #
+        # Use ``<= 0`` rather than ``< 0`` so a sample that lands exactly
+        # on the saddle (``dE/dt = 0``) is still bracketed; the linear
+        # interp then degenerates to ``t = t_zero`` cleanly. Exclude the
+        # both-zero case to avoid a 0/0 in the interp formula.
+        ts_time = None
+        if N >= 4:
+            d_int = dEdt[1:N-1]
+            both_zero = (d_int[:-1] == 0) & (d_int[1:] == 0)
+            sign_change = ((d_int[:-1] * d_int[1:]) <= 0) & ~both_zero
+            if sign_change.any():
+                # Among all interior brackets, pick the one with the
+                # highest mean energy — that's the real saddle when the
+                # path has shoulders or multiple basins.
+                brackets = sign_change.nonzero(as_tuple=False).flatten()
+                e_int = energies[1:N-1]
+                e_pair_mean = 0.5 * (e_int[brackets] + e_int[brackets + 1])
+                best = brackets[int(torch.argmax(e_pair_mean).item())]
+                i = int(best.item()) + 1  # map back to absolute index
+                # Linear interp at dE/dt = 0:
+                #   t_TS = t_i - dEdt_i * (t_{i+1} - t_i) / (dEdt_{i+1} - dEdt_i)
+                t_i, t_j = time[i], time[i + 1]
+                d_i, d_j = dEdt[i], dEdt[i + 1]
+                ts_time = t_i - d_i * (t_j - t_i) / (d_j - d_i)
 
-        self.ts_time = time[pick].to(device=self.device, dtype=self.dtype)
-        self.ts_energy = energies[pick].to(device=self.device, dtype=self.dtype)
-        self.ts_force = forces[pick].to(device=self.device, dtype=self.dtype)
-        self.ts_force_mag = torch.linalg.norm(self.ts_force, dim=-1)
+        if ts_time is None:
+            # No interior sign change — fall back to interior argmax E.
+            interior = energies[1:N-1]
+            pick = int(torch.argmax(interior).item()) + 1
+            ts_time = time[pick]
 
-        if evaluate_ts:
-            ts_output = self.forward(
-                torch.tensor([self.ts_time], device=self.device, dtype=self.dtype),
-                return_velocities=True,
-                return_energies=True,
-                return_forces=True,
-            )
-            self.ts_energy = ts_output.energies
-            self.ts_force = ts_output.forces
-            self.ts_force_mag = torch.linalg.norm(self.ts_force, dim=-1)
+        self.ts_time = ts_time.to(device=self.device, dtype=self.dtype)
 
-        # Window of ±4 quadrature samples around the picked TS, sampled
-        # at 11 points — used by the TS-region loss when configured.
-        i_lo = max(0, pick - 4)
-        i_hi = min(N - 1, pick + 4)
-        self.ts_region = torch.linspace(
-            time[i_lo].to(device=self.device, dtype=self.dtype),
-            time[i_hi].to(device=self.device, dtype=self.dtype),
-            11,
-            device=self.device,
+        # Always re-evaluate at the interpolated time to get model-truth
+        # E and F: the cached F is per-quadrature-sample, not aligned to
+        # the sign-change time, and the sample-time fmax overshoots the
+        # true saddle by enough (~6×) to dominate any practical fmax
+        # tolerance.
+        ts_output = self.forward(
+            self.ts_time.reshape(1),
+            return_velocities=False,
+            return_energies=True,
+            return_forces=True,
         )
+        self.ts_energy = ts_output.energies
+        self.ts_force = ts_output.forces
+        self.ts_force_mag = self._ts_fmax(self.ts_force)
+
+    def _ts_fmax(self, force: torch.Tensor) -> torch.Tensor:
+        """Per-atom fmax for atomistic systems; vector L2 norm otherwise.
+
+        Atomistic force is laid out as ``[..., 3 * n_atoms]``; reshape
+        to ``[..., n_atoms, 3]``, take the L2 norm over the xyz axis,
+        and reduce to the per-atom maximum. Toy potentials (no
+        ``n_atoms`` on the potential, e.g. Muller-Brown) get a plain
+        vector L2 norm.
+        """
+        f = force.reshape(-1)
+        n_atoms = getattr(self.potential, 'n_atoms', None) if self.potential is not None else None
+        if n_atoms is None:
+            return torch.linalg.norm(f)
+        return torch.linalg.norm(f.reshape(n_atoms, 3), dim=-1).max()
