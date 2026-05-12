@@ -9,13 +9,17 @@ from .integrand import build_integrand_terms, evaluate_integrand_sum
 
 @dataclass(frozen=True)
 class SamplesCache:
-    """Per-quadrature-point energy/force samples harvested during integration.
+    """Per-quadrature-point energy + dE/dt samples harvested during integration.
 
     Shape contract:
     - ``time``: ``[N*K]``, flattened from ``IntegralOutput.t``'s ``[N, K]``.
     - ``energies``: ``[N*K, E]`` (typically ``E=1``; potentials may emit a
       decomposed energy tensor).
-    - ``forces``: ``[N*K, D]`` where ``D`` is the flattened atomic dof.
+    - ``dEdt``: ``[N*K]``, scalar ``dE/dt = ∇E·ẋ = -(F·v).sum(-1)``
+      precomputed inside the integrator from the same forces and
+      velocities that were already resolved for the loss integrand —
+      cached as a scalar so the consumer doesn't carry F (shape ``[D]``)
+      around just to recompute the projection.
 
     The integrator populates this object from the same evaluations that
     produced the gradient integral, so consuming it for transition-state
@@ -24,7 +28,7 @@ class SamplesCache:
 
     time: torch.Tensor
     energies: torch.Tensor
-    forces: torch.Tensor
+    dEdt: torch.Tensor
 
 
 class PathIntegrator:
@@ -93,13 +97,16 @@ class PathIntegrator:
             Tolerances for the detached loss integral. Default to
             ``rtol``/``atol``.
         save_samples : bool, default=False
-            If True, capture ``(t, energies, forces)`` at every quadrature
+            If True, capture ``(t, energies, dE/dt)`` at every quadrature
             point evaluated during ``integrate_path`` and attach a
             ``SamplesCache`` to the returned ``IntegralOutput.samples``.
-            Energies and forces are forced into resolution via
-            ``evaluate_integrand_sum(also_resolve=('energies', 'forces'))``;
-            since ``BasePath.forward`` calls the potential exactly once
-            per evaluation regardless of which fields are requested, this
+            Energies, forces, and velocities are forced into resolution
+            via ``evaluate_integrand_sum(also_resolve=('energies',
+            'forces', 'velocities'))``; ``dE/dt`` is the scalar
+            ``-(F·v).sum(-1)``, precomputed so the consumer doesn't need
+            to carry the full ``[D]`` force around. Since
+            ``BasePath.forward`` calls the potential exactly once per
+            evaluation regardless of which fields are requested, this
             adds no path-forward calls beyond the existing gradient pass.
             Implies ``full_output=True`` (``_stitch_samples`` needs ``.t``).
         full_output : bool, default=False
@@ -175,7 +182,7 @@ class PathIntegrator:
         - ``.grad_norm_2``: ``‖∫∇L dt‖_2`` (monitoring only).
         - ``.loss``: scalar ``∫L(t) dt`` when ``track_loss=True``.
         - ``.samples``: ``SamplesCache`` (or ``None``) holding
-          per-quadrature-point energies/forces when ``save_samples=True``.
+          per-quadrature-point ``(t, E, dE/dt)`` when ``save_samples=True``.
 
         Parameters
         ----------
@@ -198,12 +205,16 @@ class PathIntegrator:
         sizes = [p.numel() for p in params]
 
         # Side-buffer for transition-state-finding samples. Each entry is a
-        # ``(t_chunk, E_chunk, F_chunk)`` triplet captured inside ``f`` and
-        # later reassembled in IntegralOutput.t.flatten() order via byte-keyed
-        # lookup (the same t tensor is passed to f and indexed into accepted_t
-        # by torchpathint, so byte equality holds).
+        # ``(t_chunk, E_chunk, dEdt_chunk)`` triplet captured inside ``f``
+        # and later reassembled in IntegralOutput.t.flatten() order via
+        # byte-keyed lookup (the same t tensor is passed to f and indexed
+        # into accepted_t by torchpathint, so byte equality holds).
+        # dE/dt is computed inside ``f`` as -(F·v).sum(-1) — forces and
+        # velocities have already been resolved for the loss integrand,
+        # so we reuse them rather than re-evaluating, and store only the
+        # scalar so the consumer doesn't carry [D]-shaped forces around.
         sample_buffer: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
-        also_resolve = ('energies', 'forces') if self.save_samples else ()
+        also_resolve = ('energies', 'forces', 'velocities') if self.save_samples else ()
 
         def f(t_flat):
             l, variables = evaluate_integrand_sum(
@@ -213,10 +224,11 @@ class PathIntegrator:
                 also_resolve=also_resolve,
             )
             if self.save_samples:
+                dEdt = -(variables['forces'] * variables['velocities']).sum(dim=-1)
                 sample_buffer.append((
                     t_flat.detach().cpu(),
                     variables['energies'].detach().cpu(),
-                    variables['forces'].detach().cpu(),
+                    dEdt.detach().cpu(),
                 ))
             l_per_t = l.reshape(t_flat.shape[0], -1).sum(dim=-1)  # [N], graph live
             n = l_per_t.shape[0]
@@ -302,7 +314,7 @@ class PathIntegrator:
         return integral_output
 
     def _stitch_samples(self, sample_buffer, accepted_t):
-        """Reassemble per-call (t, E, F) buffer entries into a flat
+        """Reassemble per-call (t, E, dEdt) buffer entries into a flat
         ``SamplesCache`` aligned with ``accepted_t.flatten()``.
 
         torchpathint passes the same ``t_eval_pending`` tensor to ``f``
@@ -312,14 +324,14 @@ class PathIntegrator:
         points in the buffer; the byte-keyed lookup just skips them.
         """
         lookup: dict[bytes, tuple[torch.Tensor, torch.Tensor]] = {}
-        for t_chunk, e_chunk, f_chunk in sample_buffer:
+        for t_chunk, e_chunk, dedt_chunk in sample_buffer:
             t_np = t_chunk.numpy()
             for i in range(t_np.shape[0]):
-                lookup[t_np[i].tobytes()] = (e_chunk[i], f_chunk[i])
+                lookup[t_np[i].tobytes()] = (e_chunk[i], dedt_chunk[i])
 
         flat_t = accepted_t.detach().cpu().flatten()
         es: list[torch.Tensor] = []
-        fs: list[torch.Tensor] = []
+        dedts: list[torch.Tensor] = []
         flat_t_np = flat_t.numpy()
         for i in range(flat_t.shape[0]):
             key = flat_t_np[i].tobytes()
@@ -332,9 +344,9 @@ class PathIntegrator:
                     "violated; check whether the integrator was modified."
                 )
             es.append(entry[0])
-            fs.append(entry[1])
+            dedts.append(entry[1])
 
         time = flat_t.to(self.device)
         energies = torch.stack(es, dim=0).to(self.device)
-        forces = torch.stack(fs, dim=0).to(self.device)
-        return SamplesCache(time=time, energies=energies, forces=forces)
+        dEdt = torch.stack(dedts, dim=0).to(self.device)
+        return SamplesCache(time=time, energies=energies, dEdt=dEdt)
