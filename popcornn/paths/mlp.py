@@ -36,13 +36,6 @@ class MLPpath(BasePath):
 
         which makes the standard threshold derivation
         ``thr_2 = δ · 2 · σ_min · fmax_target`` *system-independent*.
-        (The previous default ``M = n_embed · 3N`` scaled with system size,
-        making the same trigger value correspond to different fmax targets
-        on different systems.)
-    n_embed : int, default=1
-        Legacy width multiplier ``M = n_embed · 3N``. **Ignored** — the
-        argument is kept in the signature only so older YAMLs that pass
-        ``n_embed`` continue to load without modification.
     depth : int, default=2
         Number of ``Linear`` layers (default: input + hidden + output).
     activation : str, default="gelu"
@@ -53,7 +46,6 @@ class MLPpath(BasePath):
     def __init__(
         self,
         width: int = 128,
-        n_embed: int = 1,
         depth: int = 2,
         activation: str = "gelu",
         base: BasePath = None,

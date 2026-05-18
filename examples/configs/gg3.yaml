@@ -1,56 +1,81 @@
 # gg3 (organic 13-atom reaction; the system formerly known as rxn0003).
-# UMA-s-1p1/omol potential.
+# NewtonNet potential.
 #
-# Two legs, both on-rule (atol = thr/10):
-#   1. geodesic + repel warm-up — clash resolution. n4d2, lr=1e-3,
-#      (rtol, atol, thr) = (1e-1, 1e-4, 1e-3), patience=1. Validated 3/3
-#      seeds reach dense barrier < 3.6 eV in mean ~4.4 s wall (max ~5.5 s,
-#      iter 102–204) — well under the post-saddle target ~1 eV that
-#      stage 2 is responsible for hitting.
-#   2. UMA + pseudo-Huber(δ=0.1) saddle search. atol=1e-4, thr=1e-3 — the
-#      universal on-rule chemistry pair (same numbers as NewtonNet rxn0003
-#      and lj13.yaml; see feedback_atol_thr_on_rule_universal). UMA needed
-#      the tighter atol because |g|_∞ trigger has more seed variance —
-#      the off-rule pair caught seed 0 before fmax descended below 0.05.
+# Stage 1: geodesic + repel warm-up (atol=1e-3, rtol=1e-1, thr=1.0).
+# Stage 2: pseudo-Huber δ=0.05 + NewtonNet on-rule under |g|_2 trigger.
+#   - integrand: pvre_pseudo_huber, δ=0.05
+#     (δ = |F*_target|·‖Δx_RP‖_lower_bound = 0.05·1 = 0.05 under SAFER
+#      assumption ‖Δx_RP‖ ≥ 1, vs prior measured ‖Δx_RP‖≈3.75 → δ=0.1.
+#      The safer bound is derivation-defensible without per-system Δx_RP
+#      measurement. 2026-05-17 3-seed validated: equivalent wall + fmax
+#      to δ=0.1 ship.)
+#   - threshold metric: |g|_2 (shipped 2026-05-15)
+#   - thr_2 = 5e-3 = δ · 2·σ_min·fmax_target via IBP-bump derivation
+#     (σ_min ≈ 1 on n4d2 chem, fmax_target = 0.05, δ = 0.05)
+#   - rtol = 0.5, atol = 2.5e-3 = thr_2/2 (half-EXTREME: noise@trigger ≈ thr_2)
+#   - tol_mode = 'l2' (|err|_2 / (atol + rtol·|g|_2), matches |g|_2 trigger)
+#   - integrator method gk7 (Kronrod-7 over Gauss-3; smallest GK family
+#     member, newly added to torchpathint 2026-05-17). 7 evals per panel
+#     vs gk15's 15. Wins at half-EXTREME tols because gk15 was still
+#     subdividing meaningfully; gk7 reduces base-panel cost without
+#     losing convergence. 3-seed validated 2026-05-17 evening: gg3-NN
+#     25.8 ± 1.8 s (vs gk15 36.6 ± 8.8 s, -30%). gk5/gk3 also tested
+#     but slower due to less-reliable error estimate triggering more
+#     subdivision (non-monotonic).
+#   - Adam lr = 5e-3 (3-seed validated 2026-05-17 H6': mean wall 41.8 s
+#     vs canonical lr=1e-3's 91.6 s, 2.2× speedup, all fmax PASS).
+#   - 2026-05-17 evening ship: switched from EXTREME (rtol=1, atol=thr_2)
+#     to half-EXTREME for cross-system universality. EXTREME ships
+#     gg3-NN at 29.2 ± 3.6 s but FAILS on gg3-UMA (Adam-spike limit cycle).
+#     Half-EXTREME: gg3-NN 36.6 ± 8.8 s (3-seed validated), gg3-UMA
+#     21 min (single seed, 0 spikes). Universal recipe across chem-13
+#     NewtonNet/UMA at ~25% wall regression on chem-13 vs EXTREME.
+#     lr=1e-2 overshoots regardless of tols; n4d2/gk15 are local optima.
+#
+# Endpoints: gg3.xyz — raw R/P (NOT gg3_uma.xyz which is UMA-pre-relaxed
+# and doesn't match NewtonNet's saddle).
 initialization_params:
   images: examples/configs/gg3.xyz
   path_params:
     name: mlp
-    n_embed: 4
     depth: 2
     activation: gelu
   num_record_points: 101
   device: cuda
+  dtype: float32
   seed: 0
 optimization_params:
   - potential_params:
       name: repel
     integrator_params:
       path_integrand_names: geodesic
-      rtol: 1.0e-1
-      atol: 1.0e-4
+      rtol: 0.5
+      atol: 0.05
+      tol_mode: l2
+      method: gk7
     optimizer_params:
       optimizer:
         name: adam
-        lr: 1.0e-3
-      threshold: 1.0e-3
+        lr: 5.0e-3
+      threshold: 0.1
       patience: 1
     num_optimizer_iterations: 1000
   - potential_params:
-      name: uma
-      model_name: uma-s-1p1
-      task_name: omol
+      name: newtonnet
+      model_path: /pscratch/sd/e/ericyuan/20240322_Geodesics/20241025_GG/newtonnet/training_35/models/best_model.pt
     integrator_params:
       path_integrand_names: pvre_pseudo_huber
       path_integrand_kwargs:
         pvre_pseudo_huber:
-          delta: 0.1
-      rtol: 1.0e-1
-      atol: 1.0e-4
+          delta: 0.05
+      rtol: 0.5
+      atol: 2.5e-3
+      tol_mode: l2
+      method: gk7
     optimizer_params:
       optimizer:
         name: adam
-        lr: 1.0e-3
-      threshold: 1.0e-3
+        lr: 5.0e-3
+      threshold: 5.0e-3
       patience: 1
-    num_optimizer_iterations: 1000
+    num_optimizer_iterations: 2000

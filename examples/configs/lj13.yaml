@@ -1,30 +1,47 @@
-# Single-stage LJ-13: pseudo-Huber δ=0.1 on a small MLP (n_embed=4, depth=2).
-#   - rtol: 1.0e-1                 (relative — barrier-invariant)
-#   - atol: 1.0e-4                 (= thr/10, on-rule per atol_threshold_rule
-#                                   project memory; the UMA chemistry default)
-#   - threshold: 1.0e-3            (per-atom fmax target: < 0.05)
+# LJ-13 cluster (icosahedron → second-nearest-neighbour saddle).
+# Single-stage pseudo-Huber δ=0.05 on a small MLP (width=128, depth=2).
 #
-# Integrand: pvre_pseudo_huber with δ=0.1 — same loss family shipped on
-# rxn0003 NewtonNet. Universal on-rule (atol=thr/10) and UMA-default
-# (atol=1e-4, thr=1e-3) per the 2026-05-12 "ship UMA setting to NewtonNet
-# and LJ13" directive.
+#   - integrand: pvre_pseudo_huber, δ=0.05
+#     (δ = |F*_target|·‖Δx_RP‖_lower_bound = 0.05·1 = 0.05 under SAFER
+#      assumption ‖Δx_RP‖ ≥ 1, vs prior measured ‖Δx_RP‖≈1.72 → δ=0.1.
+#      The safer bound is derivation-defensible without per-system Δx_RP
+#      measurement. 2026-05-17 3-seed validated: equivalent wall + fmax
+#      to δ=0.1 ship.)
+#   - threshold metric: |g|_2 (shipped 2026-05-15)
+#   - thr_2 = 5e-3 = δ · 2·σ_min·fmax_target via IBP-bump derivation
+#     (σ_min ≈ 1 on n4d2 chem — LJ13 measured 1.04 — fmax_target = 0.05,
+#      δ = 0.05)
+#   - rtol = 0.5, atol = 2.5e-3 = thr_2/2 (half-EXTREME: noise@trigger ≈ thr_2)
+#   - tol_mode = 'l2' (|err|_2 / (atol + rtol·|g|_2), matches |g|_2 trigger)
+#   - integrator method gk7 (Kronrod-7 over Gauss-3; 3-seed validated
+#     2026-05-17 evening: LJ13 12.9 ± 1.0 s vs gk15 13.6 ± 1.5 s, fmax
+#     0.021 ± 0.005 vs 0.022. Marginal wall win, equivalent fmax. Ships
+#     for cross-system consistency with gg3-NN ship.)
+#   - Adam lr = 5e-3 (3-seed validated; same as gg3-NN ship)
+#   - 2026-05-17 evening ship: switched from EXTREME (rtol=1, atol=thr_2)
+#     to half-EXTREME for cross-system universality. EXTREME LJ13 7.8s,
+#     half-EXTREME 13.6 ± 1.5 s (3-seed, 3/3 PASS fmax<0.05, fmax 0.022
+#     ± 0.004). 75% slower than EXTREME on LJ13 but matches gg3-NN +
+#     gg3-UMA on a single universal recipe. Barrier 3.4423 perfect.
 #
-# Capacity: n_embed=4, depth=2 → 6435 params (output 39-D × 4-wide
-# hidden). The previous shipped n8d4 was 208k params — vastly
-# over-parameterized for LJ-13's smooth landscape.
+# Capacity: width=128, depth=2 → 5287 params (output 39-D × 128-wide hidden).
+# Smooth LJ landscape — small MLP is appropriate.
 #
 # find_ts: false is a mandatory workaround — integrator save_samples
 # crashes when find_ts=True on LJ-13. The TS argmax for path-quality
 # evaluation can be recovered post-hoc from a dense path grid.
+#
+# Single-stage: LJ-13 has no covalent-kink stage-1 issue; geodesic warm-up
+# would just be overhead.
 initialization_params:
   images: examples/configs/lj13.xyz
   path_params:
     name: mlp
-    n_embed: 4
     depth: 2
     activation: gelu
   num_record_points: 101
   device: cuda
+  dtype: float32
   seed: 0
 optimization_params:
   - potential_params:
@@ -36,14 +53,16 @@ optimization_params:
       path_integrand_names: pvre_pseudo_huber
       path_integrand_kwargs:
         pvre_pseudo_huber:
-          delta: 0.1
-      rtol: 1.0e-1
-      atol: 1.0e-4
+          delta: 0.05
+      rtol: 0.5
+      atol: 2.5e-3
+      tol_mode: l2
+      method: gk7
     optimizer_params:
       optimizer:
         name: adam
-        lr: 1.0e-3
-      threshold: 1.0e-3
+        lr: 5.0e-3
+      threshold: 5.0e-3
       patience: 1
       find_ts: false
-    num_optimizer_iterations: 1000
+    num_optimizer_iterations: 2000

@@ -1,21 +1,29 @@
-# Single-stage Müller-Brown: pseudo-Huber δ=1.0 on a small MLP (n4d2).
+# Müller-Brown (2D toy). Single-stage pseudo-Huber δ=1.0 on MLP (width=128, depth=2).
 #
-# Universal on-rule pair (atol = thr/10) at MB's scale: thr=1e-1 with
-# atol=1e-2. Matches the lj13.yaml / gg3.yaml ratio (1e-4 / 1e-3 = 0.1)
-# at MB's higher force scale (typical |F|·|v| ~ 100 vs chemistry ~ 1).
+#   - integrand: pvre_pseudo_huber, δ=1.0
+#     (δ = |F*_target|·‖Δx_RP‖ ≈ 1·1.84 ≈ 1.8 → round to 1.0; see
+#      project_popcornn_huber_apriori_threshold_derivation)
+#   - threshold metric: |g|_2 (shipped 2026-05-15)
+#   - thr_2 = 2 = δ · 2·σ_min·fmax_target via IBP-bump derivation
+#     (σ_min ≈ 1 assumed by transfer from chem n4d2 — NOT measured on MB
+#      n4d2 under |g|_2; fmax_target = 1 (MB convention); δ = 1.0)
+#   - atol = 2e-2 (= thr_2/100, the same ratio as chem n4d2 — empirically
+#     calibrated, not derivation-based)
+#   - rtol = 1e-1
+#   - integrator method gk15 (popcornn default)
 #
-# δ scaling: chemistry systems use δ=0.1 (typical |s| ~ 1); MB needs δ
-# scaled up 10× to match its higher force scale. Validated 3-seed (2026-05-12,
-# off-rule atol=1e-1): all 3 PASS, mean wall ~33 s, max F_2 ≈ 0.6 under
-# the |F|_2 < 1 target. δ=10 falls into vanishing-gradient regime;
-# δ=0.1 explodes. See project_popcornn_mb_two_stage_caveats.
+# CAVEAT: σ_min on MB n4d2 is not validated under |g|_2 trigger; thr_2=2
+# is the literal derivation assuming chem σ_min ≈ 1 transfers. If a
+# convergence pilot fails (rebound, fmax stall), measure σ_min on the
+# converged MB path and re-derive.
 initialization_params:
   images: [[-0.558, 1.442], [0.623, 0.028]]
   path_params:
     name: mlp
-    n_embed: 4
     depth: 2
     activation: gelu
+  device: cuda
+  dtype: float32
 optimization_params:
   - potential_params:
       name: muller_brown
@@ -25,11 +33,11 @@ optimization_params:
         pvre_pseudo_huber:
           delta: 1.0
       rtol: 1.0e-1
-      atol: 1.0e-2
+      atol: 2.0e-2
     optimizer_params:
       optimizer:
         name: adam
         lr: 1.0e-3
-      threshold: 1.0e-1
+      threshold: 2.0
       patience: 1
-    num_optimizer_iterations: 1000
+    num_optimizer_iterations: 2000
