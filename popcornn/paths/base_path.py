@@ -301,13 +301,22 @@ class BasePath(torch.nn.Module):
         """
         Locate the predicted transition state on the current path.
 
-        Picks the TS as the interior sign change of ``dE/dt`` on the
-        cached quadrature samples, linearly interpolates ``t`` at the
-        zero crossing, and then re-evaluates the path at that time to
-        get model-truth ``ts_energy`` / ``ts_force`` — argmax-E on the
-        same sample mesh overshoots the saddle force by ~6× because the
-        cached F is evaluated at the sample times, not at the true
-        sign-change time.
+        Linearly interpolates ``t`` at **every** interior sign change of
+        ``dE/dt`` on the cached quadrature samples, re-evaluates the
+        path at all candidates in one batched forward, and picks the
+        candidate with the highest model-truth ``energy``. Returns the
+        winning candidate's fresh ``E`` and ``F``.
+
+        Why every crossing, not just one: on wiggly paths (high-capacity
+        MLP, adversarial quadrature, multi-basin landscapes) there are
+        multiple ``dE/dt = 0`` brackets and the cache-based ranking
+        (mean of bracket-endpoint energies) can mis-rank them — picking
+        a non-rate-limiting local max, or worse, a ``- → +`` crossing
+        that's actually a local *minimum* of E. Evaluating model-truth
+        ``E`` at each candidate and taking the argmax filters both
+        failure modes: minima have lower E than nearby maxima by
+        definition, and the true saddle wins against any smaller real
+        local max.
 
         Falls back to interior ``argmax(E)`` when no interior sign
         change exists (under-resolved paths, monotone profiles). The
@@ -328,6 +337,13 @@ class BasePath(torch.nn.Module):
         and ``self.ts_force_mag`` (per-atom fmax = ``max_i ‖F_i‖_2``
         for atomistic systems; vector L2 norm for toy potentials with
         no ``n_atoms`` set).
+
+        The K candidates are batched into a single ``forward`` call —
+        cost is one batched MLIP eval, not K sequential evals. On
+        stiff paths ``K = 1`` and behavior is bit-identical to the prior
+        single-candidate code. On pathological wiggly paths ``K`` can be
+        20+; the batched call must fit in GPU memory. If it OOMs, chunk
+        the candidates yourself before calling ``ts_search``.
         """
         time = samples.time
         energies = samples.energies.flatten()
@@ -343,47 +359,49 @@ class BasePath(torch.nn.Module):
         # on the saddle (``dE/dt = 0``) is still bracketed; the linear
         # interp then degenerates to ``t = t_zero`` cleanly. Exclude the
         # both-zero case to avoid a 0/0 in the interp formula.
-        ts_time = None
+        candidate_times = None
         if N >= 4:
             d_int = dEdt[1:N-1]
             both_zero = (d_int[:-1] == 0) & (d_int[1:] == 0)
             sign_change = ((d_int[:-1] * d_int[1:]) <= 0) & ~both_zero
             if sign_change.any():
-                # Among all interior brackets, pick the one with the
-                # highest mean energy — that's the real saddle when the
-                # path has shoulders or multiple basins.
+                # Linear-interp t at each bracketed zero crossing.
                 brackets = sign_change.nonzero(as_tuple=False).flatten()
-                e_int = energies[1:N-1]
-                e_pair_mean = 0.5 * (e_int[brackets] + e_int[brackets + 1])
-                best = brackets[int(torch.argmax(e_pair_mean).item())]
-                i = int(best.item()) + 1  # map back to absolute index
-                # Linear interp at dE/dt = 0:
-                #   t_TS = t_i - dEdt_i * (t_{i+1} - t_i) / (dEdt_{i+1} - dEdt_i)
-                t_i, t_j = time[i], time[i + 1]
-                d_i, d_j = dEdt[i], dEdt[i + 1]
-                ts_time = t_i - d_i * (t_j - t_i) / (d_j - d_i)
+                # ``brackets`` indexes into the interior segments; map
+                # back to absolute indices into ``time`` / ``dEdt``.
+                i_abs = brackets + 1
+                t_i = time[i_abs]
+                t_j = time[i_abs + 1]
+                d_i = dEdt[i_abs]
+                d_j = dEdt[i_abs + 1]
+                # t_TS_k = t_i_k - d_i_k * (t_j_k - t_i_k) / (d_j_k - d_i_k)
+                candidate_times = t_i - d_i * (t_j - t_i) / (d_j - d_i)
 
-        if ts_time is None:
+        if candidate_times is None:
             # No interior sign change — fall back to interior argmax E.
             interior = energies[1:N-1]
             pick = int(torch.argmax(interior).item()) + 1
-            ts_time = time[pick]
+            candidate_times = time[pick:pick + 1]
 
-        self.ts_time = ts_time.to(device=self.device, dtype=self.dtype)
+        candidate_times = candidate_times.to(device=self.device, dtype=self.dtype)
 
-        # Always re-evaluate at the interpolated time to get model-truth
-        # E and F: the cached F is per-quadrature-sample, not aligned to
-        # the sign-change time, and the sample-time fmax overshoots the
-        # true saddle by enough (~6×) to dominate any practical fmax
-        # tolerance.
-        ts_output = self.forward(
-            self.ts_time.reshape(1),
+        # Batched fresh forward at every candidate. Picks the model-truth
+        # global-max-E candidate — the rate-limiting saddle when several
+        # brackets exist. For K=1 (stiff paths) this is identical to the
+        # prior single-candidate behavior.
+        cand_out = self.forward(
+            candidate_times,
             return_velocities=False,
             return_energies=True,
             return_forces=True,
         )
-        self.ts_energy = ts_output.energies
-        self.ts_force = ts_output.forces
+        K = candidate_times.shape[0]
+        cand_E = cand_out.energies.reshape(K, -1).sum(dim=-1)
+        winner = int(torch.argmax(cand_E).item())
+
+        self.ts_time = candidate_times[winner].reshape(1)
+        self.ts_energy = cand_out.energies[winner:winner + 1]
+        self.ts_force = cand_out.forces[winner:winner + 1]
         self.ts_force_mag = self._ts_fmax(self.ts_force)
 
     def _ts_fmax(self, force: torch.Tensor) -> torch.Tensor:

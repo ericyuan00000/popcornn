@@ -83,10 +83,10 @@ class _LegLogger:
     def wall_s(self):
         return time.perf_counter() - self._t_start
 
-    def converged(self, it, g_inf, threshold, patience):
+    def converged(self, it, g_2, threshold, patience):
         tqdm.write(
             f"converged at iter {it}  "
-            f"(|g|_∞={g_inf:.3e} < threshold={threshold:.1e} "
+            f"(|g|_2={g_2:.3e} < threshold={threshold:.1e} "
             f"for patience={patience})"
         )
 
@@ -424,6 +424,7 @@ class Popcornn:
                     "forces": path_output.forces.tolist(),
                     "loss_evals": integral_output.y.tolist(),
                     "grad_norm": integral_output.grad_norm.item(),
+                    "grad_norm_2": integral_output.grad_norm_2.item(),
                     **ts_record,
                 }
                 loss = getattr(integral_output, 'loss', None)
@@ -436,7 +437,7 @@ class Popcornn:
             if optimizer.converged:
                 logger.converged(
                     optim_idx,
-                    integral_output.grad_norm.item(),
+                    integral_output.grad_norm_2.item(),
                     optimizer.threshold,
                     optimizer.patience,
                 )
