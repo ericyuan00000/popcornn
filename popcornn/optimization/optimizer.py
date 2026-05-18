@@ -61,7 +61,7 @@ class PathOptimizer():
         ts_time_loss_names, ts_time_loss_scales, ts_time_loss_schedulers : optional
             Loss applied at the predicted TS time.
         threshold : float, optional
-            Convergence trigger on ``‖∫∇L dt‖_∞``. ``None`` disables.
+            Convergence trigger on ``‖∫∇L dt‖_2``. ``None`` disables.
         patience : int, default=5
             Number of consecutive iterations the trigger must hold.
         device : str
@@ -167,8 +167,11 @@ class PathOptimizer():
         Returns
         -------
         IntegralOutput
-            The integrator output, with ``.grad_norm`` set to the
-            ``‖∫∇L dt‖_∞`` value used for convergence checks. See
+            The integrator output, with ``.grad_norm_2`` set to the
+            ``‖∫∇L dt‖_2`` value used for convergence checks (switched
+            from ``.grad_norm`` / ``‖·‖_∞`` on 2026-05-15 — see memory
+            ``project_popcornn_g2_trigger_switch``). ``.grad_norm``
+            still holds the ``‖·‖_∞`` for monitoring. See
             ``PathIntegrator.integrate_path`` for the full set of
             popcornn-level fields attached.
         """
@@ -224,11 +227,11 @@ class PathOptimizer():
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()
 
-        # Convergence: ‖∫∇L dt‖_∞ below threshold for `patience` consecutive
+        # Convergence: ‖∫∇L dt‖_2 below threshold for `patience` consecutive
         # iterations. Patience guards against single-step dips driven by
         # adaptive-quadrature error wiggling around the threshold.
         if self.threshold is not None:
-            if integral_output.grad_norm.item() < self.threshold:
+            if integral_output.grad_norm_2.item() < self.threshold:
                 self._below_threshold_count += 1
                 if self._below_threshold_count >= self.patience:
                     self.converged = True

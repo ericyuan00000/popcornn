@@ -43,8 +43,8 @@ class PathIntegrator:
       (no separate ``.backward()`` call),
     - a ``grad_integral`` alias on the returned object for the flat
       ``[D]`` integrated gradient, and ``grad_norm`` / ``grad_norm_2``
-      fields holding ``‖∫∇L dt‖_∞`` (used by the convergence check) and
-      ``‖∫∇L dt‖_2`` (for monitoring),
+      fields holding ``‖∫∇L dt‖_∞`` (monitoring only since 2026-05-15)
+      and ``‖∫∇L dt‖_2`` (used by the convergence check),
     - an optional detached pass that integrates the loss itself, exposed
       as a ``loss`` field for monitoring,
     - an optional ``save_samples`` mode that captures per-quadrature-point
@@ -54,12 +54,13 @@ class PathIntegrator:
 
     def __init__(
             self,
-            method='gk21',
+            method='gk15',
             path_integrand_names=None,
             path_integrand_scales=None,
             path_integrand_kwargs=None,
             rtol=1e-6,
             atol=1e-7,
+            tol_mode='per_d',
             max_batch=None,
             track_loss=False,
             loss_rtol=None,
@@ -72,8 +73,13 @@ class PathIntegrator:
         """
         Parameters
         ----------
-        method : str, default="gk21"
-            torchpathint quadrature rule. ``gk21`` is Gauss–Kronrod 21pt.
+        method : str, default="gk15"
+            torchpathint quadrature rule. ``gk15`` is the adaptive
+            Gauss–Kronrod 15-point rule; chosen as the popcornn default
+            after the 2026-05-12 integrator sweep (gg3 NN pseudo-Huber)
+            showed it's 30% faster than ``gk21`` at identical TS quality.
+            Use ``gk21`` / ``gk31`` for tighter integration if the path
+            is unusually rough, or ``gl<n>`` for non-adaptive Gauss–Legendre.
         path_integrand_names : str or list of str, optional
             Per-point integrand (or list of them) to integrate. Looked up
             by name in ``PATH_INTEGRANDS``. See ``docs/loss-functions.md``.
@@ -86,6 +92,13 @@ class PathIntegrator:
             when present.
         rtol, atol : float
             Adaptive-quadrature tolerances on the gradient integral.
+        tol_mode : str, default='per_d'
+            Tolerance-aggregation rule passed to ``torchpathint.path_integral``.
+            ``'per_d'`` (legacy default): per-component denominator
+            ``atol + rtol·|g_d|`` aggregated RMS over D. ``'l2'``: scalar
+            denominator ``atol + rtol·|g|_2`` matches popcornn's |g|_2 trigger
+            metric directly. The 'l2' mode is ~√D looser at the same rtol —
+            scale rtol down by ~√D if you want equivalent tightness.
         max_batch : int, optional
             Hard cap on the number of quadrature points evaluated in
             one batch. ``None`` lets torchpathint auto-size. After each
@@ -144,6 +157,7 @@ class PathIntegrator:
         self.method = method
         self.atol = atol
         self.rtol = rtol
+        self.tol_mode = tol_mode
         # Loss integral is debug-only; let it run at its own (looser by
         # default) tolerance rather than paying for gradient-grade accuracy.
         self.track_loss = track_loss
@@ -199,8 +213,8 @@ class PathIntegrator:
         - ``.grad_integral``: alias for the flat ``[D]`` integrated
           gradient (same tensor as ``.integral`` from torchpathint;
           named for clarity at popcornn call sites).
-        - ``.grad_norm``: ``‖∫∇L dt‖_∞`` (convergence trigger).
-        - ``.grad_norm_2``: ``‖∫∇L dt‖_2`` (monitoring only).
+        - ``.grad_norm``: ``‖∫∇L dt‖_∞`` (monitoring only since 2026-05-15).
+        - ``.grad_norm_2``: ``‖∫∇L dt‖_2`` (convergence trigger).
         - ``.loss``: scalar ``∫L(t) dt`` when ``track_loss=True``.
         - ``.samples``: ``SamplesCache`` (or ``None``) holding
           per-quadrature-point ``(t, E, dE/dt)`` when ``save_samples=True``.
@@ -281,6 +295,7 @@ class PathIntegrator:
             method=self.method,
             atol=self.atol,
             rtol=self.rtol,
+            tol_mode=self.tol_mode,
             max_batch=self.max_batch,
             full_output=full_output,
             device=self.device,
@@ -335,6 +350,7 @@ class PathIntegrator:
                 method=self.method,
                 atol=self.loss_atol,
                 rtol=self.loss_rtol,
+                tol_mode=self.tol_mode,
                 max_batch=self.max_batch,
                 device=self.device,
                 dtype=self.dtype,
