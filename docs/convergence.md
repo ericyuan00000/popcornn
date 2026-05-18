@@ -42,29 +42,27 @@ The recipe:
 | System | Initial $g_\infty$ | Reasonable `threshold` |
 | --- | --- | --- |
 | Wolfe (2D analytic) | ~20 | `1.0` |
-| UMA-driven `rxn0003` | ~1.5 | `1.0e-1` |
-| Müller–Brown | ~10 (single-stage pvre) | `1.0e-1` |
-| LJ-13 cluster | ~75 (single-stage pvre) | `1.0e-3` |
+| UMA-driven `gg3` | ~1.5 | `1.0e-3` |
+| Müller–Brown | ~10 | `1.0e-1` |
+| LJ-13 cluster | ~75 | `1.0e-3` |
 
-The shipped recipes pair `threshold` with `atol` so the gradient noise
-floor sits an order of magnitude below the trigger:
+The shipped recipes use a single **on-rule** `(atol, threshold) =
+(thr/10, thr)` pair so the gradient noise floor sits an order of
+magnitude below the trigger. Stage-2 chemistry recipes all ship at the
+same numbers: pseudo-Huber + `atol=1e-4, thr=1e-3`.
 
 - `wolfe.yaml` — `threshold: 1.0`.
-- `rxn0003.yaml` — two-stage repel warm-up + UMA stage with
-  `threshold: 1.0e-1`.
-- `muller_brown.yaml` — single-stage pvre + n4d2 + lr=1e-3 +
-  `(rtol, atol, threshold) = (1e-1, 1e-2, 1e-1)` + `patience: 1`.
-  `atol/threshold = 0.1` enforces the strict `/10` noise-floor rule
-  for the trigger to fire deterministically across seeds.
-- `lj13.yaml` — single-stage pvre + n4d2 + lr=1e-3 +
-  `(rtol, atol, threshold) = (1e-1, 1e-4, 1e-3)` + `patience: 1`,
-  same `atol/threshold = 0.1` ratio. Tighter absolute values because
-  LJ-13's reduced-units barrier is ~100× lower than MB's.
-
-For a fuller exploration of the loss-schedule space (including the
-prior `pvre_squared → pvre` two-stage recipe), see the alternative
-yamls `examples/configs/lj13_{pvre,pseudo,pvre_two_stage}.yaml` and
-the [Advanced](advanced.md) multi-leg section.
+- `gg3.yaml` — two-stage. Warm-up (repel + geodesic) uses
+  `(rtol, atol, threshold) = (1e-1, 1e-4, 1e-3)`, `patience: 1`;
+  UMA stage 2 uses pseudo-Huber δ=0.1 at the same on-rule pair
+  `(rtol, atol, threshold) = (1e-1, 1e-4, 1e-3)`.
+- `muller_brown.yaml` — single-stage pseudo-Huber δ=1.0 + n4d2 +
+  lr=1e-3 + `(rtol, atol, threshold) = (1e-1, 1e-2, 1e-1)`,
+  `patience: 1`. Same `atol/thr = 0.1` ratio at MB's higher force
+  scale (δ scaled 10× from chemistry's δ=0.1).
+- `lj13.yaml` — single-stage pseudo-Huber δ=0.1 + n4d2 + lr=1e-3 +
+  `(rtol, atol, threshold) = (1e-1, 1e-4, 1e-3)`, `patience: 1`.
+  Same loss family and on-rule pair as `gg3.yaml` stage 2.
 
 Beyond pilot-and-divide, the noise-floor rule deserves its own note:
 when the optimizer's `threshold` won't fire on a sweep that the loss

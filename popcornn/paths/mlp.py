@@ -11,19 +11,33 @@ class MLPpath(BasePath):
     The configuration at time ``t`` is
 
     .. math::
-        x(t) = x_\\text{base}(t) + (1 - t)\\, t \\cdot \\text{MLP}(t; \\theta)
+        x(t) = x_\\text{base}(t) + (1 - t)\\, t \\cdot \\text{MLP}(2t - 1;\\, \\theta)
 
-    The ``(1 - t) * t`` envelope vanishes at the endpoints, so
-    regardless of what the MLP outputs the path is pinned to the
-    reactant at ``t=0`` and the product at ``t=1``. Only intermediate
-    points are trainable.
+    Two design choices keep the path well-behaved:
+
+    1. ``(1 - t) * t`` envelope pins both endpoints. Whatever the MLP
+       outputs, the path equals the base path (reactant at ``t=0``,
+       product at ``t=1``).
+    2. MLP input is rescaled to ``t' = 2t - 1`` so the input domain is
+       centered (``t' ∈ [-1, 1]``). At the midpath ``t=0.5``, the MLP
+       pre-activation ``z = w·t' + b`` reduces to ``z = b`` (bias only),
+       giving the smallest and most-Gaussian pre-activation distribution
+       at the point of physical interest. This makes σ_min(J_path) at the
+       saddle a clean, system-independent function of ``width`` (see the
+       ``width`` parameter docstring).
 
     Parameters
     ----------
-    n_embed : int, default=1
-        Width multiplier on the hidden layers.
+    width : int, default=128
+        Hidden layer width ``M``. Default chosen so
+
+        .. math::
+            \\sigma_\\text{min}(J_\\text{path}, t=\\tfrac{1}{2}, \\text{fresh init}) \\approx 1
+
+        which makes the standard threshold derivation
+        ``thr_2 = δ · 2 · σ_min · fmax_target`` *system-independent*.
     depth : int, default=2
-        Number of MLP layers (input + hidden + output).
+        Number of ``Linear`` layers (default: input + hidden + output).
     activation : str, default="gelu"
         Any nonlinearity in ``torch.nn`` (case-insensitive).
     base : BasePath, optional
@@ -31,7 +45,7 @@ class MLPpath(BasePath):
     """
     def __init__(
         self,
-        n_embed: int = 1,
+        width: int = 128,
         depth: int = 2,
         activation: str = "gelu",
         base: BasePath = None,
@@ -43,8 +57,8 @@ class MLPpath(BasePath):
         name = activation_dict[activation.lower()]
         activation_class = getattr(nn, name)
         self.activation = activation_class()
-        # input_sizes = [1] + [n_embed]*(depth - 1)
-        input_sizes = [1] + [self.final_position.shape[-1] * n_embed]*(depth - 1)
+        # Hidden width is `width` (default 128). System-independent.
+        input_sizes = [1] + [width]*(depth - 1)
         output_sizes = input_sizes[1:] + [self.final_position.shape[-1]]
         self.layers = [
             nn.Linear(
@@ -79,10 +93,13 @@ class MLPpath(BasePath):
         # (1 - time) * time pins the endpoints — at t=0 and t=1 the
         # learned correction vanishes so the path matches reactant /
         # product exactly regardless of MLP weights.
-        mlp_out = self.mlp(time) * (1 - time) * time #* 4
+        # MLP input is rescaled to [-1, 1] (t' = 2t - 1) so pre-activations
+        # at midpath come from bias only (z = b), giving a symmetric σ_min(t)
+        # profile and a system-independent fresh-init σ_min calibration.
+        mlp_out = self.mlp(2 * time - 1) * (1 - time) * time
         if self.fix_positions is not None:
             mlp_out[:, self.fix_positions] = 0.0
-        base_out = self.base.get_positions(time) #* (1 - (1 - time) * time * 4)
+        base_out = self.base.get_positions(time)
         out = base_out + mlp_out
         return out
 

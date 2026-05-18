@@ -1,36 +1,43 @@
-# Single-stage Müller-Brown: pvre on a small MLP (n_embed=4, depth=2).
+# Müller-Brown (2D toy). Single-stage pseudo-Huber δ=1.0 on MLP (width=128, depth=2).
 #
-# Recipe picked from a 3-seed sweep over (capacity, lr, rtol, atol, thr)
-# at patience=1 with the |F|_2 < 1 stop criterion at the parabolic-refined
-# TS argmax. n4d2 is the smallest capacity that holds F_2<1 across all
-# 3 seeds without late-iter rebound; lr=1e-3 keeps the |g|_∞ trajectory
-# monotone enough that a round-decade threshold + patience=1 fires at the
-# right time.
+#   - integrand: pvre_pseudo_huber, δ=1.0
+#     (δ = |F*_target|·‖Δx_RP‖ ≈ 1·1.84 ≈ 1.8 → round to 1.0; see
+#      project_popcornn_huber_apriori_threshold_derivation)
+#   - threshold metric: |g|_2 (shipped 2026-05-15)
+#   - thr_2 = 2 = δ · 2·σ_min·fmax_target via IBP-bump derivation
+#     (σ_min ≈ 1 assumed by transfer from chem n4d2 — NOT measured on MB
+#      n4d2 under |g|_2; fmax_target = 1 (MB convention); δ = 1.0)
+#   - atol = 2e-2 (= thr_2/100, the same ratio as chem n4d2 — empirically
+#     calibrated, not derivation-based)
+#   - rtol = 1e-1
+#   - integrator method gk15 (popcornn default)
 #
-# atol=1e-2, threshold=1e-1: atol/thr = 0.1 enforces the strict /10
-# noise-floor rule (mirrors lj13.yaml, which uses atol/thr = 1e-4/1e-3
-# = 0.1 for the same reason). Mean wall ~38s across 3 seeds, max F_2 at
-# stop ≈ 0.62 (1.6× headroom under target=1). Cheaper than the
-# both-tightened (atol=thr=1e-2) variant because thr=1e-1 fires earlier
-# in the descent.
+# CAVEAT: σ_min on MB n4d2 is not validated under |g|_2 trigger; thr_2=2
+# is the literal derivation assuming chem σ_min ≈ 1 transfers. If a
+# convergence pilot fails (rebound, fmax stall), measure σ_min on the
+# converged MB path and re-derive.
 initialization_params:
   images: [[-0.558, 1.442], [0.623, 0.028]]
   path_params:
     name: mlp
-    n_embed: 4
     depth: 2
     activation: gelu
+  device: cuda
+  dtype: float32
 optimization_params:
   - potential_params:
       name: muller_brown
     integrator_params:
-      path_integrand_names: pvre
+      path_integrand_names: pvre_pseudo_huber
+      path_integrand_kwargs:
+        pvre_pseudo_huber:
+          delta: 1.0
       rtol: 1.0e-1
-      atol: 1.0e-2
+      atol: 2.0e-2
     optimizer_params:
       optimizer:
         name: adam
         lr: 1.0e-3
-      threshold: 1.0e-1
+      threshold: 2.0
       patience: 1
-    num_optimizer_iterations: 1000   # typical converge ~210–500
+    num_optimizer_iterations: 2000

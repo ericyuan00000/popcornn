@@ -46,7 +46,7 @@ class NewtonNetPotential(BasePotential):
         # model.aggregators[0] = NullAggregator()
         model.eval()
         model.output_layers[1].create_graph = True
-        model.to(torch.float64)
+        model.to(self.dtype)
         model.requires_grad_(False)
         model.embedding_layer.requires_dr = False
         return model

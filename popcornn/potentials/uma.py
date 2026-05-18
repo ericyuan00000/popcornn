@@ -45,7 +45,14 @@ class UMAPotential(BasePotential):
 
 
     def load_model(self, model_name, task_name):
-        predictor = pretrained_mlip.get_predict_unit(model_name=model_name, device=self.device.type)
+        # Propagate self.dtype to fairchem's model via InferenceSettings.
+        # Default is float32; without this, fp64 mep ends up with float32
+        # UMA weights and float32 forces despite self.dtype=float64.
+        inference_settings = InferenceSettings(base_precision_dtype=self.dtype)
+        predictor = pretrained_mlip.get_predict_unit(
+            model_name=model_name, device=self.device.type,
+            inference_settings=inference_settings,
+        )
         calc = FAIRChemCalculator(predictor, task_name=task_name)
         calc.predictor.model.module.output_heads['energyandforcehead'].head.training = True
         return calc.predictor

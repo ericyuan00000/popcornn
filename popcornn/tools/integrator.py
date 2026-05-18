@@ -88,7 +88,28 @@ class PathIntegrator:
             Adaptive-quadrature tolerances on the gradient integral.
         max_batch : int, optional
             Hard cap on the number of quadrature points evaluated in
-            one batch. ``None`` lets torchpathint auto-size.
+            one batch. ``None`` lets torchpathint auto-size. After each
+            ``integrate_path`` the learned size sticks: if torchpathint
+            had to halve to recover from a CUDA OOM, the smaller value
+            is reused on the next call so the OOM-and-halve cycle only
+            fires once per integrator lifetime, not once per optimizer
+            step.
+
+            Scope is the ``PathIntegrator`` instance. Within a single
+            stage / optimizer loop, persistence is automatic. Across
+            stages built by ``Popcornn._optimize_leg`` (one fresh
+            integrator per leg) it does **not** carry over — that's
+            intentional, since different legs typically use different
+            potentials with different memory profiles. Multi-stage
+            harnesses that *do* know their later legs share a potential
+            can thread the value explicitly::
+
+                integ1 = PathIntegrator(...)
+                for it in range(N1):
+                    optr1.optimization_step(path, integ1)
+                integ2 = PathIntegrator(..., max_batch=integ1.max_batch)
+                for it in range(N2):
+                    optr2.optimization_step(path, integ2)
         track_loss : bool, default=False
             Run a separate detached integral of the scalar loss
             ``∫L(t) dt`` for monitoring. Costs an extra pass; when
@@ -198,10 +219,16 @@ class PathIntegrator:
             self.update_integrand_scales(**integrand_scales)
 
         # torchpathint requires 0-d bounds; popcornn historically passed 1-d.
-        t_init_0d = torch.as_tensor(t_init).squeeze()
-        t_final_0d = torch.as_tensor(t_final).squeeze()
+        t_init_0d = torch.as_tensor(t_init, dtype=self.dtype, device=self.device).squeeze()
+        t_final_0d = torch.as_tensor(t_final, dtype=self.dtype, device=self.device).squeeze()
 
-        params = list(path.parameters())
+        # Filter out frozen params (requires_grad=False). When a potential
+        # is attached via set_potential, it's registered as an nn.Module
+        # submodule of the path, so its params appear in path.parameters().
+        # Potentials that freeze their weights (e.g. NewtonNet's
+        # `model.requires_grad_(False)`) would otherwise trip
+        # autograd.grad's "differentiated Tensors does not require grad".
+        params = [p for p in path.parameters() if p.requires_grad]
         sizes = [p.numel() for p in params]
 
         # Side-buffer for transition-state-finding samples. Each entry is a
@@ -259,6 +286,11 @@ class PathIntegrator:
             device=self.device,
             dtype=self.dtype,
         )
+        # Persist any OOM-driven shrink across calls. torchpathint returns
+        # the value of max_batch that survived the call (= input if no OOM,
+        # smaller otherwise); reusing it means the halve fires once per
+        # integrator, not once per optimizer step.
+        self.max_batch = integral_output.max_batch
 
         # ``integral_output.integral`` is torchpathint's generic name for the
         # integrated function value — here it's the flat [D] gradient. Alias
@@ -308,6 +340,9 @@ class PathIntegrator:
                 dtype=self.dtype,
             )
             integral_output.loss = loss_output.integral.detach()
+            # Loss pass may shrink further (it has no autograd graph, but
+            # the integrand magnitudes can drive different K's per interval).
+            self.max_batch = loss_output.max_batch
 
         self.integral_output = integral_output
         self.N_integrals += 1

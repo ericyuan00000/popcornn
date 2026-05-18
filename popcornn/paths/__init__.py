@@ -18,7 +18,7 @@ def get_path(name, **config):
     **config
         Forwarded to the path class. ``BasePath`` requires ``images``,
         ``device``, ``dtype``; subclasses add their own (e.g. MLP takes
-        ``n_embed``, ``depth``, ``activation``).
+        ``width``, ``depth``, ``activation``).
 
     Returns
     -------
