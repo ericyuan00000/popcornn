@@ -1,0 +1,67 @@
+# gg3 (organic 13-atom reaction) — UMA potential variant.
+# Companion to gg3.yaml (NewtonNet). Same path/integrator/optimizer recipe;
+# only the potential and endpoints differ.
+#
+# Recipe rationale: see gg3.yaml header for the full derivation chain. Universal
+# half-EXTREME + gk7 + tol_mode=l2 recipe is shared across chem-13 systems
+# (gg3-NN, gg3-UMA, LJ13). 2026-05-17 evening 3-seed validation on UMA:
+# walls 340 / 576 / 432 s → 449 ± 119 s (7.5 ± 2.0 min), 3/3 PASS at
+# fmax 0.036 ± 0.004 (target 0.05). Variance is ~26% relative — higher than
+# gg3-NN (7% relative) due to occasional Adam-spike sequences in steep-descent
+# phase. seed=1 lands in a slightly different basin (barrier 3.4365 vs seed
+# 0/2's 3.4526). 3.2× faster than canonical (lr=1e-3, δ=0.1, gk15, raw endpoints,
+# per_d tols): 24 min seed=0.
+#
+# gk5/gk3 also tested on UMA seed=0: gk5 = 404 s (+19% vs gk7), gk3 = 658 s
+# AND fmax 0.055 FAIL — lower-order GK loses on UMA same as on NN.
+#
+# Endpoints: gg3_uma.xyz — UMA-pre-relaxed R/P. Using raw gg3.xyz instead
+# adds significant stage-2 cost (21 min seed=0 single pilot) because UMA's
+# saddle is at a different geometry than NewtonNet's. ALWAYS pair this YAML
+# with gg3_uma.xyz.
+initialization_params:
+  images: examples/configs/gg3_uma.xyz
+  path_params:
+    name: mlp
+    depth: 2
+    activation: gelu
+  num_record_points: 101
+  device: cuda
+  dtype: float32
+  seed: 0
+optimization_params:
+  - potential_params:
+      name: repel
+    integrator_params:
+      path_integrand_names: geodesic
+      rtol: 0.5
+      atol: 0.05
+      tol_mode: l2
+      method: gk7
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 5.0e-3
+      threshold: 0.1
+      patience: 1
+    num_optimizer_iterations: 1000
+  - potential_params:
+      name: uma
+      model_name: uma-s-1p1
+      task_name: omol
+    integrator_params:
+      path_integrand_names: pvre_pseudo_huber
+      path_integrand_kwargs:
+        pvre_pseudo_huber:
+          delta: 0.05
+      rtol: 0.5
+      atol: 2.5e-3
+      tol_mode: l2
+      method: gk7
+    optimizer_params:
+      optimizer:
+        name: adam
+        lr: 5.0e-3
+      threshold: 5.0e-3
+      patience: 1
+    num_optimizer_iterations: 2000
