@@ -1,29 +1,16 @@
-# Müller-Brown (2D toy). Single-stage pseudo-Huber δ=1.0 on MLP (width=128, depth=2).
-#
-#   - integrand: pvre_pseudo_huber, δ=1.0
-#     (δ = |F*_target|·‖Δx_RP‖ ≈ 1·1.84 ≈ 1.8 → round to 1.0; see
-#      project_popcornn_huber_apriori_threshold_derivation)
-#   - threshold metric: |g|_2 (shipped 2026-05-15)
-#   - thr_2 = 2 = δ · 2·σ_min·fmax_target via IBP-bump derivation
-#     (σ_min ≈ 1 assumed by transfer from chem n4d2 — NOT measured on MB
-#      n4d2 under |g|_2; fmax_target = 1 (MB convention); δ = 1.0)
-#   - atol = 2e-2 (= thr_2/100, the same ratio as chem n4d2 — empirically
-#     calibrated, not derivation-based)
-#   - rtol = 1e-1
-#   - integrator method gk15 (popcornn default)
-#
-# CAVEAT: σ_min on MB n4d2 is not validated under |g|_2 trigger; thr_2=2
-# is the literal derivation assuming chem σ_min ≈ 1 transfers. If a
-# convergence pilot fails (rebound, fmax stall), measure σ_min on the
-# converged MB path and re-derive.
 initialization_params:
   images: [[-0.558, 1.442], [0.623, 0.028]]
   path_params:
     name: mlp
+    width: 128
     depth: 2
     activation: gelu
+  track_loss: false
+  track_ts: false
+  num_record_points: 101
   device: cuda
   dtype: float32
+  seed: 0
 optimization_params:
   - potential_params:
       name: muller_brown
@@ -31,13 +18,12 @@ optimization_params:
       path_integrand_names: pvre_pseudo_huber
       path_integrand_kwargs:
         pvre_pseudo_huber:
-          delta: 1.0
-      rtol: 1.0e-1
-      atol: 2.0e-2
+          delta: 0.05
+      rtol: 0.5
+      atol: 2.5e-3
     optimizer_params:
       optimizer:
         name: adam
-        lr: 1.0e-3
-      threshold: 2.0
-      patience: 1
-    num_optimizer_iterations: 2000
+        lr: 5.0e-3
+      threshold: 5.0e-3
+    num_optimizer_iterations: 1000
