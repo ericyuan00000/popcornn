@@ -9,8 +9,8 @@ You select a path representation with `path_params.name`:
 ```yaml
 initialization_params:
   path_params:
-    name: mlp        # or 'linear'
-    n_embed: 1
+    name: mlp       # or 'linear'
+    width: 128
     depth: 2
     activation: gelu
 ```
@@ -29,29 +29,64 @@ have any trainable parameters, so there's nothing to optimize.
 
 ### `mlp` (default)
 
-A small multi-layer perceptron $\Delta(t; \theta)$ added on top of
-the linear path:
+A small multi-layer perceptron $\Delta(t'; \theta)$ added on top of
+the linear path with input rescaled to $t' = 2t - 1 \in [-1, 1]$:
 
 $$x(t) = \underbrace{x_0 + t\,(x_1 - x_0)}_{\text{linear base}}
-       + \underbrace{(1 - t)\, t \cdot \Delta(t; \theta)}_{\text{MLP correction}}$$
+       + \underbrace{(1 - t)\, t \cdot \Delta(2t - 1;\, \theta)}_{\text{MLP correction}}$$
 
-The factor $(1 - t)\, t$ vanishes at $t = 0$ and $t = 1$, so the path
-is **pinned** to the reactant and product at the endpoints regardless
-of what the MLP outputs. The MLP only ever moves intermediate points.
+Two design choices keep the path well-behaved:
+
+- The $(1 - t)\, t$ envelope vanishes at $t = 0$ and $t = 1$, so the
+  path is **pinned** to the reactant and product at the endpoints
+  regardless of what the MLP outputs.
+- The **REPAR** input rescaling $t' = 2t - 1$ centers the MLP input
+  domain on zero, which makes the pre-activation at the midpath
+  ($t = 0.5$, $t' = 0$) reduce to bias-only ($z = b$). That gives a
+  symmetric $\sigma_{\min}(t)$ profile and a system-independent
+  fresh-init $\sigma_{\min}$ calibration (see below).
 
 | Key | Default | Effect |
 | --- | --- | --- |
-| `n_embed` | `1` | Width multiplier on the hidden layers. Larger = more expressive. |
-| `depth` | `2` | Number of layers. `depth=2` is one input layer + one output layer (no hidden). `depth=4` adds two hidden layers. |
+| `width` | `128` | Hidden layer width. Calibrated so $\sigma_{\min}(J_\text{path}) \approx 1$ at midpath (see below). |
+| `depth` | `2` | Number of `Linear` layers. `depth=2` is `Linear(1, width) → GELU → Linear(width, 3N)`. |
 | `activation` | `"gelu"` | Any nonlinearity in `torch.nn` (case-insensitive). |
 
-For simple reactions, `depth: 2, n_embed: 1` is enough.
-`muller_brown.yaml` and `lj13.yaml` use `depth: 2, n_embed: 4` —
-empirically the smallest stable capacity at the shipped lr=1e-3 +
-patience=1 trigger across 3 seeds. For more complicated reactions
-(concerted multi-bond rearrangements, large configurational changes),
-bump `depth` up; `depth: 4, n_embed: 8` is what the `wolfe.yaml` and
-`loss_example.yaml` configs use.
+You usually shouldn't touch `width`. It's set so that
+$\sigma_{\min}(J_\text{path}) \approx 1$, which makes the [convergence
+threshold derivation](derivation.md) system-independent.
+
+## $\sigma_{\min}$ calibration (why `width=128`?)
+
+The shipped recipe in [convergence](convergence.md) assumes
+$\sigma_{\min}(J_\text{path}) \approx 1$ at the midpath. This is a
+property of the path-MLP architecture and the initialization — not of
+the chemistry. With `width=128` + REPAR input and PyTorch's default
+`kaiming_uniform` Linear init, $\sigma_{\min}$ is empirically
+system-independent:
+
+| System | $3N$ | $D$ (params) | $\sigma_{\min}(\text{midpath})$ at fresh init |
+| --- | ---:| ---:| ---:|
+| Müller–Brown | 2 | 514 | 0.905 |
+| LJ-13 | 39 | 5,287 | 0.902 |
+| gg3 | 39 | 5,287 | 0.902 |
+| gg9711 | 57 | 7,609 | 0.901 |
+| rost50 | 213 | 27,733 | 0.901 |
+
+All within 0.5% of each other across two orders of magnitude in $3N$.
+The closed-form expression (derived in
+[derivation](derivation.md)) is
+
+$$\sigma_{\min}(J_\text{path}, t = 0.5) \;=\; \tfrac{1}{4} \cdot
+\|h(t'=0)\|_2 \;\approx\; \tfrac{1}{4}\sqrt{W \cdot \mathbb{E}[\text{GELU}^2(b)]}$$
+
+where $W$ is the hidden width and $b \sim U[-1, 1]$ is the bias-only
+pre-activation at midpath under REPAR. The $\tfrac{1}{4}$ is the
+$t(1-t)$ envelope evaluated at $t = \tfrac{1}{2}$.
+
+For `width=128`, this gives $\sigma_{\min} \approx 1$ — which is why
+that's the default. Changing `width` shifts the calibration by
+$\sqrt{W / 128}$ and you'll need to re-derive `threshold`.
 
 ## Adding your own path representation
 
@@ -85,7 +120,10 @@ path_dict = {
 
 `BasePath` handles the rest: velocity computation via autograd,
 output reshaping, periodic-boundary wrapping, fixed-atom masking, and
-the `forward` interface popcornn calls.
+the `forward` interface popcornn calls. It also exposes
+`ts_search(samples)` which downstream consumers (the logger, the
+convergence trigger) use to populate `ts_time`, `ts_energy`,
+`ts_force`, `ts_force_mag`, and `barrier` on the path object.
 
 ## Why parameterize the path?
 

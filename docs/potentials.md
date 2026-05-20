@@ -127,7 +127,8 @@ MLIPs are trained on physically reasonable geometries. If your
 reactant/product alignment puts two atoms 0.3 Å apart, the MLIP will
 return garbage energies and the optimization will diverge. The
 soft-repulsive `repel` potential, run with
-`path_integrand_names: geodesic`, performs **geodesic interpolation**: it
-warps the path so atoms don't pass through each other, without trying
-to find a transition state. Use it as a first leg, then swap in your
-real MLIP for the second leg.
+`path_integrand_names: geodesic`, performs **geodesic interpolation**:
+it warps the path so atoms don't pass through each other, without
+trying to find a transition state. Use it as a first stage, then swap
+in your real MLIP for the second stage. The shipped `gg3.yaml` config
+follows exactly this pattern.

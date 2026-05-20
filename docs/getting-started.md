@@ -34,11 +34,11 @@ A real-system example using the UMA MLIP also ships, but takes longer
 and needs a GPU plus the UMA install:
 
 ```bash
-python run.py --config configs/rxn0003.yaml
+python run.py --config configs/gg3.yaml
 ```
 
 When `run.py` finishes on an **atomistic** input (anything that came
-from an ASE `Atoms` list — including the `rxn0003` example) it writes:
+from an ASE `Atoms` list — including the `gg3` example) it writes:
 
 - `popcornn.xyz` — the optimized path as a sequence of frames.
 - `popcornn_ts.xyz` — the single frame at the predicted transition
@@ -54,37 +54,41 @@ for sanity-checking the optimization machinery.
 
 ## 3. Run on your own reaction
 
-The shortest possible custom config:
+The shortest possible custom config (just sets the physical
+$F_2$-target and lets the shipped defaults fill in everything else):
 
 ```yaml
 initialization_params:
   images: my_reaction.xyz       # at least the reactant and product
-  path_params:
-    name: mlp                   # neural-network path
-    n_embed: 1
-    depth: 2
 
 optimization_params:
   - potential_params:
-      name: uma                 # or mace, orb, leftnet, ...
+      name: uma                 # or mace, orb, leftnet, newtonnet, ...
       model_name: uma-s-1p1
       task_name: omol
     integrator_params:
-      path_integrand_names: pvre
-      rtol: 1.0e-2
-      atol: 1.0e-2
+      path_integrand_names: pvre_pseudo_huber
+      path_integrand_kwargs:
+        pvre_pseudo_huber:
+          delta: 0.05           # = F_2_target × ‖Δx‖_lb
     optimizer_params:
       optimizer:
         name: adam
-        lr: 1.0e-3
-      threshold: 1.0e-1
+        lr: 5.0e-3
+      threshold: 5.0e-3         # = δ × 2 × σ_min × F_2_target
     num_optimizer_iterations: 1000
 ```
+
+`width=128, depth=2`, `method=gk7`, `tol_mode='l2'`, `rtol=0.5`,
+`atol=2.5e-3`, `patience=1` all come from the shipped defaults.
 
 Point `images:` at an `xyz` or `traj` file. The first frame is treated
 as the reactant, the last frame as the product. Any frames in between
 are intermediate guesses — popcornn will fit the path through them but
 won't pin them.
+
+To target a different $F_2^{\text{target}}$, see [Convergence](convergence.md) for the
+formulas that convert it into `delta`, `threshold`, and `atol`.
 
 Before you hand atoms to popcornn:
 
@@ -97,7 +101,28 @@ Before you hand atoms to popcornn:
   respect to the reactant. By default popcornn does this for you using
   the minimum-image convention, but if any atom moves more than half a
   cell during the reaction, unwrap manually and pass
-  `unwrap_positions: false` in `path_params`.
+  `unwrap_positions: false` in `initialization_params`.
+
+For chemistry with covalent-bond rearrangements, add a clash-resolution
+warm-up stage first:
+
+```yaml
+optimization_params:
+  - potential_params: {name: repel}
+    integrator_params:
+      path_integrand_names: geodesic
+      rtol: 0.5
+      atol: 0.05
+    optimizer_params:
+      optimizer: {name: adam, lr: 5.0e-3}
+      threshold: 0.1
+    num_optimizer_iterations: 1000
+  - # ... MLIP saddle-search stage as above
+```
+
+Stage 1's `(threshold=0.1, atol=0.05)` are the geodesic-warm-up
+counterpart to the chemistry stage's `(threshold=5e-3, atol=2.5e-3)`
+— same `atol = threshold/2` rule, just at a looser geometric target.
 
 ## 4. Use the Python API directly
 
@@ -114,57 +139,71 @@ for image in images:
 
 mep = Popcornn(
     images=images,
-    path_params={"name": "mlp", "n_embed": 1, "depth": 2},
+    path_params={"name": "mlp", "width": 128, "depth": 2},
+    track_loss=True,    # so stage-end log shows loss
+    track_ts=True,      # so stage-end log shows barrier and |F|
 )
 
-final_images, ts_image = mep.optimize_path(
+mep.optimize_path(
     {
-        "potential_params": {"potential": "repel"},
-        "integrator_params": {"path_integrand_names": "geodesic"},
-        "optimizer_params": {"optimizer": {"name": "adam", "lr": 1.0e-1}},
+        "potential_params": {"name": "repel"},
+        "integrator_params": {
+            "path_integrand_names": "geodesic",
+            "rtol": 0.5, "atol": 0.05,
+        },
+        "optimizer_params": {
+            "optimizer": {"name": "adam", "lr": 5.0e-3},
+            "threshold": 0.1,
+        },
         "num_optimizer_iterations": 1000,
     },
     {
         "potential_params": {
-            "potential": "uma",
+            "name": "uma",
             "model_name": "uma-s-1p1",
             "task_name": "omol",
         },
         "integrator_params": {
-            "path_integrand_names": "pvre",
-            "rtol": 1.0e-2,
-            "atol": 1.0e-2,
+            "path_integrand_names": "pvre_pseudo_huber",
+            "path_integrand_kwargs": {
+                "pvre_pseudo_huber": {"delta": 0.05},
+            },
         },
         "optimizer_params": {
-            "optimizer": {"name": "adam", "lr": 1.0e-3},
-            "threshold": 1.0e-1,
+            "optimizer": {"name": "adam", "lr": 5.0e-3},
+            "threshold": 5.0e-3,
         },
         "num_optimizer_iterations": 1000,
     },
 )
 
+final_images = mep.get_discrete_path()
+ts_image = mep.get_ts()
 write("popcornn.xyz", final_images)
 write("popcornn_ts.xyz", ts_image)
 ```
 
 This is the same recipe the YAML driver uses. Each dict you pass to
-`optimize_path` is one **leg** of optimization — you can chain as many
-as you like. The example above runs a cheap repulsive pre-step
+`optimize_path` is one **stage** of optimization — you can chain as
+many as you like. The example above runs a cheap repulsive pre-step
 (geodesic interpolation, fixes atom clashes) before the expensive
 MLIP-driven step.
 
 ## 5. What happens during optimization
 
-Each leg:
+Each stage:
 
-1. Picks up the path from where the previous leg left it.
+1. Picks up the path from where the previous stage left it.
 2. Picks up the potential and the loss you specified.
 3. Repeatedly evaluates a path integral of the loss along the path,
    gets a gradient with respect to the path's neural-network
    parameters, and steps Adam.
-4. Stops when the integrated gradient norm has been below `threshold`
-   for `patience` consecutive iterations, or when
+4. Stops when the integrated gradient L2 norm `|g|_2` stays below
+   `threshold` for `patience` consecutive iterations, or when
    `num_optimizer_iterations` is reached.
+5. Runs one diagnostic integration with `track_loss + track_ts` on
+   so the stage-end log line carries the loss integral, barrier, and
+   `|F|` at the predicted TS.
 
 For more on the convergence criterion and how to tune it, see
 [Convergence](convergence.md).

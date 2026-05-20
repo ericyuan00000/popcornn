@@ -36,37 +36,37 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 at the very top of your entry-point file.
 
-## 2. `total_mem_usage`
+## 2. `max_batch`
 
-If you still hit OOM, the integrator's auto-batching is overestimating
-how much memory you have free. Cap it manually:
-
-```yaml
-integrator_params:
-  path_integrand_names: pvre
-  rtol: 1.0e-2
-  atol: 1.0e-2
-  total_mem_usage: 0.75      # default is 0.9
-```
-
-`total_mem_usage` is the fraction of currently-free GPU memory the
-adaptive batcher is allowed to fill on its next batch. Lower it
-until OOMs stop. `0.75` and `0.5` are reasonable retries.
-
-## 3. `max_batch`
-
-If even `total_mem_usage: 0.5` still OOMs, hard-cap the batch:
+If you still hit OOM, hard-cap the per-quadrature-step batch:
 
 ```yaml
 integrator_params:
-  path_integrand_names: pvre
+  path_integrand_names: pvre_pseudo_huber
   max_batch: 32
 ```
 
 This forces every quadrature call to evaluate at most 32 points.
 Slower (more sequential calls), but bounded memory.
 
-## 4. Float precision
+torchpathint also remembers what value worked the last time
+`integrate_path` was called on a given `PathIntegrator` instance, so
+the OOM-and-halve cycle only fires once per integrator lifetime, not
+once per optimizer step. Across stages built by
+`Popcornn._optimize` (one fresh integrator per stage), the learned
+value does **not** carry over — that's intentional, since different
+stages typically use different potentials with different memory
+profiles. Multi-stage harnesses that *do* know their later stages
+share a potential can thread the value explicitly:
+
+```python
+integ1 = PathIntegrator(...)
+# ... run stage 1
+integ2 = PathIntegrator(..., max_batch=integ1.max_batch)
+# ... stage 2 starts with stage 1's learned batch size
+```
+
+## 3. Float precision
 
 Switching from `float32` to `float64` doubles the memory footprint,
 so:
@@ -79,23 +79,31 @@ initialization_params:
 is preferred unless you specifically need `float64` for numerical
 sensitivity (you almost never do for path optimization).
 
-## 5. Smaller path network
+## 4. Smaller path network
 
 A bigger MLP doesn't just cost more compute — every parameter
 contributes to the gradient that gets propagated through the
-integrator. Drop `n_embed` and `depth` in `path_params` if memory is
-tight:
+integrator. Drop `width` in `path_params` if memory is tight:
 
 ```yaml
 path_params:
   name: mlp
-  n_embed: 1
+  width: 64    # default is 128
   depth: 2
 ```
 
-This is also the default and is enough for most reactions.
+⚠️ **Changing `width` changes the** $\sigma_{\min}(J_\text{path})$
+**calibration**, which the shipped `threshold` derivation assumes is
+≈ 1. If you halve `width`, the calibration shifts by
+$\sqrt{64/128} \approx 0.71$, and `threshold` should be scaled
+accordingly:
 
-## 6. CPU offload
+$$\text{threshold}_{\text{new}} \;=\; \text{threshold}_{\text{shipped}} \cdot \sqrt{W_{\text{new}} / 128}.$$
+
+See [paths](paths.md) for the $\sigma_{\min}$ calibration and
+[derivation](derivation.md) for why this rescaling holds.
+
+## 5. CPU offload
 
 You can run the whole optimization on CPU by setting
 `device: cpu` in `initialization_params`. Slow, but it never OOMs.
@@ -103,7 +111,7 @@ This is mostly only practical for the analytic toy potentials.
 
 ## What to do if it's still OOM
 
-If you've worked through 1–6 and still see OOM, file a GitHub issue
+If you've worked through 1–5 and still see OOM, file a GitHub issue
 with:
 
 - The full traceback, including the actual CUDA allocator message.

@@ -109,5 +109,5 @@ Popcornn's job is to give you that good starting point cheaply.
 - [Loss functions](loss-functions.md) for the per-point quantities
   popcornn integrates.
 - [Paths](paths.md) for the neural-network path representation
-  (`n_embed`, `depth`, what `MLPpath` is built on top of `LinearPath`).
+  (`width`, `depth`, what `MLPpath` is built on top of `LinearPath`).
 - [Potentials](potentials.md) for which energy models are wired up.

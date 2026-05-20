@@ -51,6 +51,8 @@ When you want more:
 - [Potentials](potentials.md), [Paths](paths.md),
   [Loss functions](loss-functions.md) — what's built in, how to add
   your own.
-- [Advanced](advanced.md) — schedulers, multi-leg optimization,
+- [Advanced](advanced.md) — schedulers, multi-stage optimization,
   transition-state losses.
+- [Derivation](derivation.md) — the math behind the closed-form
+  recipe `threshold = δ · 2·σ_min · F2_target`.
 - [Code reference](reference/popcornn.md) — auto-generated API docs.
