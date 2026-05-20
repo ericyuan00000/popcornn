@@ -1,5 +1,5 @@
 initialization_params:
-  images: configs/rost50_uma.xyz
+  images: configs/rost50.xyz
   path_params:
     name: mlp
     width: 128
