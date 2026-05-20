@@ -2,94 +2,80 @@
 
 Topics beyond the first-time user path.
 
-## Multi-leg optimization
+## Multi-stage optimization
 
-`Popcornn.optimize_path` accepts an arbitrary number of leg dicts.
-Each leg picks up the path from where the previous one left off, then
+`Popcornn.optimize_path` accepts an arbitrary number of stage dicts.
+Each stage picks up the path from where the previous one left off, then
 swaps in its own potential, loss, and optimizer settings. The
-canonical pattern is **clash-resolution then real run**:
+canonical pattern is **clash-resolution then MLIP-driven saddle search**:
 
 ```python
-final_images, ts_image = mep.optimize_path(
+mep.optimize_path(
     {
-        # leg 1: cheap repulsive geodesic interpolation
-        "potential_params": {"potential": "repel"},
-        "integrator_params": {"path_integrand_names": "geodesic"},
-        "optimizer_params": {"optimizer": {"name": "adam", "lr": 1.0e-1}},
+        # stage 1: cheap repulsive geodesic interpolation
+        "potential_params": {"name": "repel"},
+        "integrator_params": {
+            "path_integrand_names": "geodesic",
+            "rtol": 0.5, "atol": 0.05,
+        },
+        "optimizer_params": {
+            "optimizer": {"name": "adam", "lr": 5.0e-3},
+            "threshold": 0.1,
+        },
         "num_optimizer_iterations": 1000,
     },
     {
-        # leg 2: MLIP-driven TS search
+        # stage 2: MLIP-driven TS search
         "potential_params": {
-            "potential": "uma",
+            "name": "uma",
             "model_name": "uma-s-1p1",
             "task_name": "omol",
         },
         "integrator_params": {
-            "path_integrand_names": "pvre",
-            "rtol": 1.0e-2,
-            "atol": 1.0e-2,
+            "path_integrand_names": "pvre_pseudo_huber",
+            "path_integrand_kwargs": {
+                "pvre_pseudo_huber": {"delta": 0.05},
+            },
         },
         "optimizer_params": {
-            "optimizer": {"name": "adam", "lr": 1.0e-3},
-            "threshold": 1.0e-1,
+            "optimizer": {"name": "adam", "lr": 5.0e-3},
+            "threshold": 5.0e-3,
         },
         "num_optimizer_iterations": 1000,
     },
 )
 ```
 
-You can chain more legs — for example, switch loss functions
-mid-optimization, or step the learning rate down across legs. The
-path's network parameters are persistent state on the `Popcornn`
-instance.
+You can chain more stages — switch loss functions mid-optimization,
+step the learning rate down across stages, swap potentials. The path's
+network parameters are persistent state on the `Popcornn` instance.
 
-### Smooth-then-sharp loss schedule (`pvre_squared → pvre`)
+### Choice of stage-2 loss
 
-A canonical multi-leg pattern uses two losses with the same
-saddle-point physics but different optimization dynamics:
+The shipped recipe uses `pvre_pseudo_huber` at the
+$\delta = 0.05$ derived from $F_2^{\text{target}}$
+(see [Convergence](convergence.md)). The pseudo-Huber form is smooth
+at the saddle so adaptive Gauss–Kronrod doesn't have to refine across
+the kink that plain `pvre` has there. For most reactions, no further
+multi-stage loss-schedule is needed.
 
-- **`pvre_squared`** has a $C^\infty$-smooth integrand, so adaptive
-  Gauss–Kronrod converges in one or two passes per step (~5× cheaper
-  than `pvre`). It drives the path most of the way to the MEP, but its
-  gradient $\partial \ell / \partial \theta \propto 2(v\!\cdot\!F)$
-  vanishes near the saddle ridge, so it plateaus before pinpointing
-  the TS.
-- **`pvre`**'s sign-driven gradient keeps pushing once warm-started,
-  snapping the path onto the saddle in a small number of iterations.
+When you might want a separate warm-up:
 
-`examples/configs/lj13_pvre_two_stage.yaml` is a worked two-stage
-example you can use as a template. The current shipped
-`muller_brown.yaml` and `lj13.yaml` use a different design point —
-**single-stage pvre on a small MLP (n_embed=4, depth=2) with a
-deterministic patience=1 trigger**. That recipe is described in
-[Convergence](convergence.md) and gives consistent wall + path quality
-across seeds with the strict `atol/threshold = 0.1` noise-floor rule.
-
-When to use which design:
-
-- **Single-stage pvre + n4d2** (the shipped default) — easiest to
-  reason about, deterministic stop, no mid-run loss switch. Best for
-  callers that just want a path and don't need the very last decade
-  of TS-force quality.
-- **Two-stage pvre² → pvre** — wins when the per-iter integrator cost
-  of `pvre` dominates and `pvre_squared`'s 5× cheaper integration can
-  amortize a warm-up. Tune the stage-1 threshold from a pilot of the
-  warm-up's own gradient scale (typically ~$g_\infty / 30$). If
-  stage-1's $|F_\perp|_\mathrm{TS}$ is non-monotonic (LJ-13 case
-  observed: descends then oscillates back up 44×), set stage-1
-  threshold *before* the rebound; otherwise the path arrives at stage
-  2 worse than where it bottomed.
-- **Two-stage pvre² → pseudo-Huber δ** — useful when stage-2 needs to
-  bridge between the smooth `pvre_squared` warm-up and the sharp
-  `pvre` ridge without picking up `pvre`'s integrator cost; small δ
-  (≤ 0.01 on chemistry units) keeps the gradient sign-driven near the
-  saddle while staying smooth elsewhere.
+- **`pvre_squared`** has a $C^\infty$-smooth integrand and a
+  gradient $\propto 2(v\!\cdot\!F)$ that drives the path quickly toward
+  the MEP but plateaus near the saddle. Sometimes useful as a stage-1
+  warm-up before `pvre_pseudo_huber` — but in practice the
+  pseudo-Huber's small-$|s|$ quadratic regime already covers what
+  `pvre_squared` was for, so this combination is rarely shipped.
+- **`pvre`** (the sharp $L_1$ form) keeps pushing once warm-started
+  but pays for adaptive-quadrature refinement around its sign-kink.
+  Prefer `pvre_pseudo_huber` unless you specifically want the
+  sign-driven behavior.
 
 ## Schedulers
 
-Three independent scheduler families are available per leg. Each is a
-dict whose keys name what's being scheduled and whose values
+Three independent scheduler families are available per stage. Each is
+a dict whose keys name what's being scheduled and whose values
 configure the scheduler.
 
 ### `lr_scheduler` — learning rate
@@ -101,7 +87,7 @@ once per optimization iteration.
 optimizer_params:
   optimizer:
     name: adam
-    lr: 1.0e-3
+    lr: 5.0e-3
   lr_scheduler:
     name: cosineannealinglr
     T_max: 1000
@@ -110,8 +96,8 @@ optimizer_params:
 
 ### `path_integrand_schedulers` — per-loss-term weights
 
-Multiplies entries of `path_integrand_scales` (in `integrator_params`) by a
-schedule. Useful for ramping one term down while another ramps up.
+Multiplies entries of `path_integrand_scales` (in `integrator_params`)
+by a schedule. Useful for ramping one term down while another ramps up.
 
 ```yaml
 integrator_params:
@@ -134,8 +120,8 @@ optimizer_params:
       last_step: 99
 ```
 
-This config ramps the pVRE term from full weight to zero, and VRE from
-zero to full weight, over the first 100 iterations.
+This config ramps the pVRE term from full weight to zero, and VRE
+from zero to full weight, over the first 100 iterations.
 
 Available scheduler types:
 
@@ -151,52 +137,54 @@ the predicted TS time, useful e.g. for minimizing the force magnitude
 at the TS (`F_mag` as a TS-time loss). The scales can be scheduled
 with `ts_time_loss_schedulers`.
 
-The TS itself is picked by `BasePath.ts_search`: find the interior
-sign change of `dE/dt` on the per-quadrature-point sample cache the
-integrator already collects during the gradient pass, linearly
-interpolate `t` at the zero crossing, and re-evaluate the path once
-at that time to get model-truth `E` / `F`. Endpoints are excluded
-because the reactant/product minima sit there with `dE/dt ≈ 0`.
-When no interior sign change exists (under-resolved paths, monotone
-profiles), `ts_search` falls back to interior `argmax(E)`. Saddle
-resolution is set by the integrator's `rtol` / `atol`; tighten those
-if the bracketed segment is wide.
+The TS itself is picked by `BasePath.ts_search`: linearly interpolate
+$t$ at **every** interior `dE/dt = 0` sign change on the
+per-quadrature-point sample cache the integrator already collects,
+append the two endpoints ($t = 0$ and $t = 1$) as candidates, evaluate
+the path at every candidate in one batched forward, and pick the
+candidate with the highest model-truth energy. Two consequences:
+
+- On wiggly paths (high-capacity MLP, adversarial quadrature,
+  multi-basin landscapes) where there are multiple interior `dE/dt = 0`
+  brackets, the model-truth ranking picks the rate-limiting saddle.
+- For a **barrierless** reaction (no interior maximum), the
+  argmax-over-candidates correctly picks the higher-energy endpoint,
+  and the reported barrier is $\max(E_R, E_P) - E_R$ — either zero
+  (exoergic) or $E_P - E_R$ (endoergic).
+
+The same call also populates `path.ts_time`, `path.ts_energy`,
+`path.ts_force`, `path.ts_force_mag`, and `path.barrier`.
 
 ## Logging per-iteration state
 
-Every run prints a sparse per-iter table to stdout (header at leg
-start, rows at iters 0/5/10/25/50/75/100/150/200/250 then every 50,
-plus the last; columns iter / loss / |g|_∞ / |g|_2 / step_s).
+Every run prints a sparse per-iter table to stdout (one header at
+stage start, one row per iter, plus the convergence + stage-end
+lines). Columns: `iter / step_s / loss / grad / barrier / force`.
 This is on by default — no setup needed.
 
 For a programmatic record of the same scalar metrics, pass
-`metrics_log_path=<dir>` to `optimize_path`. Each leg writes one
-JSONL file `<dir>/opt_<leg-index>.jsonl` with one row per iteration:
-`iter`, `loss`, `grad_norm_inf`, `grad_norm_2`, `lr`, `step_s`,
-`wall_s`, `converged`. Rows are flushed each iteration so a killed
-run still leaves a valid file.
+`metrics_log_path=<file>` to `optimize_path`. The logger writes one
+JSONL row per iteration to that exact path with fields:
 
-When `output_dir` is set on the `Popcornn` constructor and you
-*don't* pass `metrics_log_path`, the JSONL log defaults to
-`<output_dir>/metrics/` so it lands next to the heavy per-iter dump
-described next.
+```
+iter, loss, grad_norm, lr, step_s, wall_s, converged, barrier, ts_force_norm
+```
 
-For full per-iter state — the path itself, energies, forces — set
-`output_dir`. Each leg then also writes one JSON file per iteration
-to `<output_dir>/opt_<leg-index>/logs/output_<iter>.json`, with:
+Rows are flushed each iteration so a killed run still leaves a valid
+file. The `barrier` and `ts_force_norm` fields are non-null only when
+`track_ts=True` was passed to the `Popcornn` constructor; the `loss`
+field is non-null only when `track_loss=True` was passed.
 
-- `time`, `positions`, `energies`, `velocities`, `forces` — the path
-  evaluated at the integrator's quadrature times.
-- `loss_evals` — per-time loss evaluations.
-- `grad_norm` — the L∞ norm of the path-integrated gradient (the
-  convergence signal).
-- `ts_time`, `ts_positions`, `ts_energies`, `ts_velocities`,
-  `ts_forces` — the predicted TS at this iteration.
-- `loss` — the scalar loss integral $\int \mathcal{L}\,\mathrm{d}t$;
-  only present if `track_loss: true`.
+After the optimizer-loop trigger fires, popcornn runs **one diagnostic
+integration with `track_loss + track_ts` on** and reports `loss`,
+`barrier`, and `|F|` on the stage-end line:
 
-This is a lot of data. Don't enable it for production runs unless
-you're debugging.
+```
+stage 1 done  iters=143  time=339.2s  time/iter=2.37e+00s  barrier=3.45  ts_force_norm=0.07
+```
+
+This is the most reliable single number for "how converged did this
+stage actually get".
 
 ## Custom path integrands
 

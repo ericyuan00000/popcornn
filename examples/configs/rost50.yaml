@@ -1,35 +1,12 @@
-# rost50 (71-atom organic reaction). UMA-s-1p1/omol potential.
-#
-# Stage 1: geodesic + repel warm-up (atol=1e-3, rtol=1e-1, thr=1.0).
-# Stage 2: pseudo-Huber δ=0.1 + UMA on-rule under |g|_2 trigger.
-#   - integrand: pvre_pseudo_huber, δ=0.1
-#     (Coulomb-noZ × r_ref² predicts δ ≈ 0.14 on rost50; round to 0.1.
-#      Raw / Kabsch ‖Δx‖ over-predict due to collective-motion contamination.
-#      See project_popcornn_huber_apriori_threshold_derivation for L_est
-#      table across systems.)
-#   - threshold metric: |g|_2 (shipped 2026-05-15)
-#   - thr_2 = 1e-2 = δ · 2·σ_min·fmax_target
-#     (σ_min ≈ 1 ASSUMED — measured on chem-13 n4d2, NOT validated on
-#      71-atom rost50 under |g|_2. fmax_target = 0.05; δ = 0.1)
-#   - atol = 1e-4 (same chem ratio as gg3/lj13; empirically calibrated)
-#   - rtol = 1e-1
-#   - integrator method gk15 (popcornn default)
-#
-# CAVEATS (2026-05-17 derivation pass):
-# - σ_min ≈ 1 transfer from chem-13 to 71-atom rost50 is untested.
-# - Prior loose-tol ship (thr_2=1e-3, atol=5e-4, rtol=5e-1, patience=10)
-#   was chosen 2026-05-13 because (a) stage-1 warm path leaves fmax floor
-#   ~1 eV/Å above the 0.05 target — see project_popcornn_rost50_loose_ships
-#   — and (b) n8d4 tight tolerances OOM. We're at n4d2 here so memory
-#   shouldn't bite, but the fmax-floor issue is upstream of the recipe
-#   and won't be fixed by tightening; expect convergence to a similar
-#   ~1 eV/Å fmax until stage-1 is improved.
 initialization_params:
-  images: examples/configs/rost50.xyz
+  images: configs/rost50_uma.xyz
   path_params:
     name: mlp
+    width: 128
     depth: 2
     activation: gelu
+  track_loss: true
+  track_ts: true
   num_record_points: 101
   device: cuda
   dtype: float32
@@ -39,14 +16,13 @@ optimization_params:
       name: repel
     integrator_params:
       path_integrand_names: geodesic
-      rtol: 1.0e-1
-      atol: 1.0e-3
+      rtol: 0.5
+      atol: 0.05
     optimizer_params:
       optimizer:
         name: adam
-        lr: 1.0e-3
-      threshold: 1.0
-      patience: 1
+        lr: 1.0e-2
+      threshold: 0.1
     num_optimizer_iterations: 1000
   - potential_params:
       name: uma
@@ -56,13 +32,12 @@ optimization_params:
       path_integrand_names: pvre_pseudo_huber
       path_integrand_kwargs:
         pvre_pseudo_huber:
-          delta: 0.1
-      rtol: 1.0e-1
-      atol: 1.0e-4
+          delta: 0.05
+      rtol: 0.5
+      atol: 2.5e-3
     optimizer_params:
       optimizer:
         name: adam
-        lr: 1.0e-3
-      threshold: 1.0e-2
-      patience: 1
-    num_optimizer_iterations: 2000
+        lr: 1.0e-2
+      threshold: 5.0e-3
+    num_optimizer_iterations: 1000

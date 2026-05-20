@@ -3,9 +3,6 @@ from dataclasses import dataclass
 from einops import rearrange
 from popcornn.tools import Images, SamplesCache, wrap_positions
 from popcornn.potentials.base_potential import BasePotential, PotentialOutput
-from typing import Callable, Any
-from ase import Atoms
-from ase.io import read
 
 
 @dataclass
@@ -118,7 +115,7 @@ class BasePath(torch.nn.Module):
         """
         Attach a potential to evaluate energies/forces along the path.
 
-        Each optimization leg constructs its own potential and calls
+        Each optimization stage constructs its own potential and calls
         this; the path holds onto the most recently set one.
         """
         self.potential = potential
@@ -302,28 +299,29 @@ class BasePath(torch.nn.Module):
         Locate the predicted transition state on the current path.
 
         Linearly interpolates ``t`` at **every** interior sign change of
-        ``dE/dt`` on the cached quadrature samples, re-evaluates the
-        path at all candidates in one batched forward, and picks the
+        ``dE/dt`` on the cached quadrature samples, appends the two
+        endpoints (``t=0`` and ``t=1``) to the candidate set, re-evaluates
+        the path at all candidates in one batched forward, and picks the
         candidate with the highest model-truth ``energy``. Returns the
-        winning candidate's fresh ``E`` and ``F``.
+        winning candidate's fresh ``E`` and ``F`` and the corresponding
+        barrier ``E_TS - E_reactant``.
 
-        Why every crossing, not just one: on wiggly paths (high-capacity
-        MLP, adversarial quadrature, multi-basin landscapes) there are
-        multiple ``dE/dt = 0`` brackets and the cache-based ranking
-        (mean of bracket-endpoint energies) can mis-rank them — picking
-        a non-rate-limiting local max, or worse, a ``- → +`` crossing
+        Why every interior crossing: on wiggly paths (high-capacity MLP,
+        adversarial quadrature, multi-basin landscapes) there are multiple
+        ``dE/dt = 0`` brackets and the cache-based ranking (mean of
+        bracket-endpoint energies) can mis-rank them — picking a
+        non-rate-limiting local max, or worse, a ``- → +`` crossing
         that's actually a local *minimum* of E. Evaluating model-truth
         ``E`` at each candidate and taking the argmax filters both
-        failure modes: minima have lower E than nearby maxima by
-        definition, and the true saddle wins against any smaller real
-        local max.
+        failure modes.
 
-        Falls back to interior ``argmax(E)`` when no interior sign
-        change exists (under-resolved paths, monotone profiles). The
-        endpoints are excluded from both the bracket search and the
-        argmax: paths are parameterized so the reactant/product minima
-        sit at ``t=0`` and ``t=1`` where ``dE/dt`` is also ~0, and
-        picking either of those is never the right call.
+        Why endpoints are included as candidates: a **barrierless** path
+        has no interior maximum — the highest-energy point lies at one
+        of the endpoints (the higher-lying reactant or product minimum
+        for an exoergic / endoergic step). The endpoint candidate
+        ``t=0`` or ``t=1`` correctly wins the argmax in that case, and
+        the barrier reduces to ``max(E_R, E_P) - E_R`` — either zero
+        (exoergic) or ``E_P - E_R`` (endoergic).
 
         Parameters
         ----------
@@ -334,21 +332,21 @@ class BasePath(torch.nn.Module):
         Notes
         -----
         Sets ``self.ts_time``, ``self.ts_energy``, ``self.ts_force``,
-        and ``self.ts_force_mag`` (per-atom fmax = ``max_i ‖F_i‖_2``
-        for atomistic systems; vector L2 norm for toy potentials with
-        no ``n_atoms`` set).
+        ``self.ts_force_mag`` (per-atom fmax = ``max_i ‖F_i‖_2`` for
+        atomistic systems; vector L2 norm for toy potentials with no
+        ``n_atoms`` set), and ``self.barrier`` (``E_TS - E_reactant``,
+        non-negative).
 
         The K candidates are batched into a single ``forward`` call —
         cost is one batched MLIP eval, not K sequential evals. On
-        stiff paths ``K = 1`` and behavior is bit-identical to the prior
-        single-candidate code. On pathological wiggly paths ``K`` can be
-        20+; the batched call must fit in GPU memory. If it OOMs, chunk
-        the candidates yourself before calling ``ts_search``.
+        stiff paths ``K = 3`` (two endpoints + one interior crossing).
+        On pathological wiggly paths ``K`` can be 20+; the batched call
+        must fit in GPU memory. If it OOMs, chunk the candidates
+        yourself before calling ``ts_search``.
         """
         time = samples.time
-        energies = samples.energies.flatten()
         dEdt = samples.dEdt
-        N = energies.shape[0]
+        N = time.shape[0]
 
         # Interior sign-change brackets. ``dE/dt`` touches zero at the
         # endpoints (reactant/product minima), so a global sign search
@@ -359,7 +357,7 @@ class BasePath(torch.nn.Module):
         # on the saddle (``dE/dt = 0``) is still bracketed; the linear
         # interp then degenerates to ``t = t_zero`` cleanly. Exclude the
         # both-zero case to avoid a 0/0 in the interp formula.
-        candidate_times = None
+        interior_candidates = None
         if N >= 4:
             d_int = dEdt[1:N-1]
             both_zero = (d_int[:-1] == 0) & (d_int[1:] == 0)
@@ -375,46 +373,37 @@ class BasePath(torch.nn.Module):
                 d_i = dEdt[i_abs]
                 d_j = dEdt[i_abs + 1]
                 # t_TS_k = t_i_k - d_i_k * (t_j_k - t_i_k) / (d_j_k - d_i_k)
-                candidate_times = t_i - d_i * (t_j - t_i) / (d_j - d_i)
+                interior_candidates = t_i - d_i * (t_j - t_i) / (d_j - d_i)
 
-        if candidate_times is None:
-            # No interior sign change — fall back to interior argmax E.
-            interior = energies[1:N-1]
-            pick = int(torch.argmax(interior).item()) + 1
-            candidate_times = time[pick:pick + 1]
-
-        candidate_times = candidate_times.to(device=self.device, dtype=self.dtype)
+        # Always include the endpoints as candidates so a barrierless
+        # path can pick the higher-energy reactant or product as TS.
+        # Put t=0 first so cand_E[0] is unambiguously the reactant energy.
+        endpoint_candidates = torch.tensor(
+            [0.0, 1.0], device=self.device, dtype=self.dtype,
+        )
+        if interior_candidates is not None:
+            candidate_times = torch.cat(
+                [endpoint_candidates,
+                 interior_candidates.to(device=self.device, dtype=self.dtype)],
+                dim=0,
+            )
+        else:
+            candidate_times = endpoint_candidates
 
         # Batched fresh forward at every candidate. Picks the model-truth
         # global-max-E candidate — the rate-limiting saddle when several
-        # brackets exist. For K=1 (stiff paths) this is identical to the
-        # prior single-candidate behavior.
+        # brackets exist, or the higher-energy endpoint for a barrierless
+        # path.
         cand_out = self.forward(
             candidate_times,
             return_velocities=False,
             return_energies=True,
             return_forces=True,
         )
-        K = candidate_times.shape[0]
-        cand_E = cand_out.energies.reshape(K, -1).sum(dim=-1)
-        winner = int(torch.argmax(cand_E).item())
+        winner = int(torch.argmax(cand_out.energies).item())
 
-        self.ts_time = candidate_times[winner].reshape(1)
-        self.ts_energy = cand_out.energies[winner:winner + 1]
-        self.ts_force = cand_out.forces[winner:winner + 1]
-        self.ts_force_mag = self._ts_fmax(self.ts_force)
-
-    def _ts_fmax(self, force: torch.Tensor) -> torch.Tensor:
-        """Per-atom fmax for atomistic systems; vector L2 norm otherwise.
-
-        Atomistic force is laid out as ``[..., 3 * n_atoms]``; reshape
-        to ``[..., n_atoms, 3]``, take the L2 norm over the xyz axis,
-        and reduce to the per-atom maximum. Toy potentials (no
-        ``n_atoms`` on the potential, e.g. Muller-Brown) get a plain
-        vector L2 norm.
-        """
-        f = force.reshape(-1)
-        n_atoms = getattr(self.potential, 'n_atoms', None) if self.potential is not None else None
-        if n_atoms is None:
-            return torch.linalg.norm(f)
-        return torch.linalg.norm(f.reshape(n_atoms, 3), dim=-1).max()
+        self.ts_time = candidate_times[winner]
+        self.ts_energy = cand_out.energies[winner]
+        self.ts_force = cand_out.forces[winner]
+        # Barrier = E_TS - E_reactant. Index 0 is t=0 by construction.
+        self.barrier = self.ts_energy - cand_out.energies[0]

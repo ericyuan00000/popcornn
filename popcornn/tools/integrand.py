@@ -302,6 +302,7 @@ def build_integrand_terms(names, scales=None, kwargs=None) -> list[IntegrandTerm
     return terms
 
 
+# TODO: Remove this function and move its logic into the integrator class, which is the only caller.
 def resolve_variables(
     eval_time,
     path,
@@ -372,6 +373,7 @@ def resolve_variables(
     }
 
 
+# TODO: Remove this function and move its logic into the integrator class, which is the only caller. A sum of integrands should have its own class that handles this logic internally.
 def evaluate_integrand_sum(
     terms,
     eval_time,

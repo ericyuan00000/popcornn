@@ -1,119 +1,173 @@
 # Convergence
 
-Each `optimization_params` leg exits when one of two things happens:
+Each `optimization_params` stage exits when one of two things happens:
 
-1. The L∞ norm of the path-integrated gradient
-   $\big\| \int \nabla_\theta \mathcal{L} \, \mathrm{d}t \big\|_\infty$
+1. The L2 norm of the path-integrated loss gradient,
+   $\big\| \int \nabla_\theta \mathcal{L} \, \mathrm{d}t \big\|_2$,
    stays below `threshold` for `patience` consecutive iterations.
 2. `num_optimizer_iterations` is reached.
 
 Whichever fires first.
 
-## What gets compared to `threshold`
+Picking `threshold` is the only stage-2 number you really have to
+think about, and there's a closed-form recipe that converts your
+physical $F_2$-target (the L2 norm of the force vector at the
+predicted transition state) into `threshold` plus the integrator
+tolerances. **You don't have to pilot-and-divide.**
 
-Popcornn integrates the **gradient** of the loss with respect to the
-path's neural-network parameters $\theta$ along the path. The result
-is a vector of the same shape as $\theta$. The convergence check uses
-its L∞ (per-component max) norm:
+## The derivation chain
 
-$$g_\infty = \max_i \left| \int_0^1 \frac{\partial \mathcal{L}}{\partial \theta_i}\, \mathrm{d}t \right|$$
+Three knobs are determined by `F2_target`:
 
-Why L∞ rather than L2? The L2 norm scales with $\sqrt{D}$ where $D$
-is the parameter count, so the same `threshold` doesn't transfer
-across path-network sizes. L∞ is closer to size-independent.
+```
+F2_target  →  δ            (loss δ, only for pseudo-Huber)
+           →  threshold     (the |g|_2 convergence trigger)
+           →  atol, rtol    (integrator tolerances)
+```
 
-## How to pick `threshold`
+### 1. δ (Pseudo-Huber loss shape parameter)
 
-`threshold` is **system-dependent**. Gradient magnitudes differ by
-orders of magnitude between toy potentials and real MLIP-driven runs,
-and even between MLIPs.
+`pvre_pseudo_huber` has a δ knob that interpolates between L1-like
+(small δ) and L2-like (large δ) behavior around the saddle. The
+gradient magnitude near the saddle scales as δ, so δ should be set
+relative to the force you want there:
 
-The recipe:
+$$\delta = F_2^{\text{target}} \cdot \|\Delta x_{R \to P}\|_{\text{lb}}$$
 
-1. **Pilot run.** Set `threshold: null` (or just omit it) and run
-   for, say, 50 iterations. Watch the per-iteration $g_\infty$ in
-   the integrator output.
-2. **Read the early value.** Look at iterations ~5–20. This is your
-   "starting" gradient norm before the optimizer has had time to
-   make progress.
-3. **Drop one order of magnitude.** Set `threshold` to roughly that
-   early value divided by 10.
+where $\|\Delta x_{R \to P}\|_{\text{lb}}$ is a lower bound on the
+reactant→product displacement norm. The **safe a priori bound is 1**
+(works for any chemistry system; round up if your endpoints are
+unusually close in configuration space).
 
-| System | Initial $g_\infty$ | Reasonable `threshold` |
+### 2. `threshold` (the |g|_2 convergence trigger)
+
+The IBP-derived relationship between the integrated loss gradient and
+the residual force at the TS (full derivation in the appendix below) is
+
+$$\text{threshold} \;=\; \delta \cdot 2 \, \sigma_{\min}(J_\text{path}) \cdot F_2^{\text{target}}$$
+
+where $\sigma_{\min}(J_\text{path})$ is the smallest singular value of
+the path Jacobian $\partial x(t)/\partial \theta$ at the saddle. For
+the shipped path representation (`width=128` `MLPpath` with REPAR
+input), $\sigma_{\min} \approx 1$ is **system-independent** —
+measured 0.90 ± 0.005 across $3N$ from 2 (Müller–Brown) to 213
+(rost50). See `paths.md` for the calibration.
+
+So in practice:
+
+$$\text{threshold} \;\approx\; \delta \cdot 2 \, F_2^{\text{target}}$$
+
+### 3. `atol`, `rtol` (integrator noise budget)
+
+The adaptive Gauss–Kronrod integrator needs a noise budget small
+enough not to mask the trigger, large enough not to over-refine. The
+"half-EXTREME" pair sits at:
+
+$$\text{atol} = \text{threshold} / 2, \qquad \text{rtol} = 0.5, \qquad \text{tol\_mode} = \text{`l2'}$$
+
+`tol_mode='l2'` makes the integrator use a scalar `atol + rtol·|g|_2`
+denominator that matches the trigger metric. With this pair the
+total integrator noise at the trigger is
+`atol + rtol·|g|_2 ≈ threshold/2 + 0.5·threshold = threshold` —
+comparable to the trigger itself, which is loose enough that GK
+doesn't over-subdivide but tight enough that the trigger fires
+cleanly.
+
+## Worked example
+
+At the universal `F2_target = 0.05` (eV/Å for chemistry, dimensionless
+for toy potentials), with $\sigma_{\min} \approx 1$:
+
+| knob | value | how |
 | --- | --- | --- |
-| Wolfe (2D analytic) | ~20 | `1.0` |
-| UMA-driven `gg3` | ~1.5 | `1.0e-3` |
-| Müller–Brown | ~10 | `1.0e-1` |
-| LJ-13 cluster | ~75 | `1.0e-3` |
+| `F2_target` | 0.05 | physical input |
+| δ | 0.05 | $F_2 \cdot \|\Delta x_{R\to P}\|_{\text{lb}} = 0.05 \cdot 1$ |
+| `threshold` | 5e-3 | $\delta \cdot 2 \cdot 1 \cdot 0.05$ |
+| `atol` | 2.5e-3 | $\text{threshold} / 2$ |
+| `rtol` | 0.5 | half-EXTREME |
 
-The shipped recipes use a single **on-rule** `(atol, threshold) =
-(thr/10, thr)` pair so the gradient noise floor sits an order of
-magnitude below the trigger. Stage-2 chemistry recipes all ship at the
-same numbers: pseudo-Huber + `atol=1e-4, thr=1e-3`.
+## Shipped recipe
 
-- `wolfe.yaml` — `threshold: 1.0`.
-- `gg3.yaml` — two-stage. Warm-up (repel + geodesic) uses
-  `(rtol, atol, threshold) = (1e-1, 1e-4, 1e-3)`, `patience: 1`;
-  UMA stage 2 uses pseudo-Huber δ=0.1 at the same on-rule pair
-  `(rtol, atol, threshold) = (1e-1, 1e-4, 1e-3)`.
-- `muller_brown.yaml` — single-stage pseudo-Huber δ=1.0 + n4d2 +
-  lr=1e-3 + `(rtol, atol, threshold) = (1e-1, 1e-2, 1e-1)`,
-  `patience: 1`. Same `atol/thr = 0.1` ratio at MB's higher force
-  scale (δ scaled 10× from chemistry's δ=0.1).
-- `lj13.yaml` — single-stage pseudo-Huber δ=0.1 + n4d2 + lr=1e-3 +
-  `(rtol, atol, threshold) = (1e-1, 1e-4, 1e-3)`, `patience: 1`.
-  Same loss family and on-rule pair as `gg3.yaml` stage 2.
-
-Beyond pilot-and-divide, the noise-floor rule deserves its own note:
-when the optimizer's `threshold` won't fire on a sweep that the loss
-clearly converges, the issue is usually that the integrator's atol
-sets a $g_\infty$ floor too close to (or above) `threshold`. Setting
-`atol = threshold / 10` (with `rtol` low enough that
-`rtol · g_typical_at_stop` is also `≤ threshold / 10`) is the
-mechanical fix. See the docstrings in
-`tests_ongoing/sweep_mb_lr1em3_tol_thr.py` /
-`sweep_lj13_n4d2_lr1em3.py` for the empirical sweep that derived
-the shipped (rtol, atol, threshold) triples.
-
-The pilot-and-divide recipe applies per stage: each leg gets its own
-threshold from its own initial $g_\infty$. `pvre_squared` gradients are
-roughly $2|v\!\cdot\!F|$ times larger than `pvre` gradients, so a
-`pvre_squared` warm-up stage typically needs a threshold ~10³× larger
-than a `pvre` fine-tune stage on the same system.
-
-## How to pick `patience`
-
-Default is `5`. Adam exhibits a damped-oscillation phase as it
-settles, and adaptive quadrature adds its own stochastic wiggle on
-top. `patience` absorbs single-iteration dips below `threshold` so
-the trigger only fires when the loss has actually flattened.
-
-Override only if you have a specific reason — usually you don't.
-
-- **Lower (1–3)** if you need fast turnaround and don't mind
-  occasional false positives.
-- **Higher (10+)** for noisy MLIPs where the gradient norm wobbles a
-  lot near convergence.
-
-## Disabling the trigger
-
-`threshold: null` (the default) skips the convergence check entirely
-and always runs the full `num_optimizer_iterations`. Use this for:
-
-- The initial pilot pass (you don't yet know the gradient scale).
-- Cheap legs where you want a fixed-iteration budget.
-
-## Monitoring the loss itself
-
-Convergence is driven by the gradient norm, not the loss value. If
-you also want to watch the loss integral $\int \mathcal{L}\,\mathrm{d}t$
-per iteration (for plotting or human sanity-checking), set:
+Every system (chemistry and 2D toys) ships at `F2_target = 0.05`,
+which collapses to a single stage-2 recipe:
 
 ```yaml
 integrator_params:
-  track_loss: true
+  path_integrand_names: pvre_pseudo_huber
+  path_integrand_kwargs:
+    pvre_pseudo_huber: {delta: 0.05}
+  rtol: 0.5
+  atol: 2.5e-3
+  tol_mode: l2
+  method: gk7
+optimizer_params:
+  optimizer: {name: adam, lr: 5.0e-3}
+  threshold: 5.0e-3
+  patience: 1
 ```
 
-That runs a separate detached quadrature with looser tolerances
-(`loss_rtol`, `loss_atol`, defaulting to `rtol`/`atol`) so it doesn't
-dominate runtime. The result lands on `integral_output.loss`.
+All systems use the same `width=128` `MLPpath`, so the
+$\sigma_{\min} \approx 1$ calibration holds without re-derivation.
+
+## Why L2 (not L∞)?
+
+Earlier popcornn used the L∞ norm of the integrated gradient. L∞ has
+more seed-to-seed variance because a single component max can spike
+on adaptive-quadrature noise. L2 averages over all $D$ components,
+which damps the noise. The trade-off is that L2 nominally scales with
+$\sqrt{D}$ — but the shipped path-MLP is `width=128`-fixed (so $D$ is
+the same for every system at a given output dimension), and the
+$\sigma_{\min}(J_\text{path})$ calibration that the threshold derivation
+relies on is also system-independent at that width (see
+[paths](paths.md)). Net result: L2 is the practical convergence
+metric.
+
+## How to pick `patience`
+
+Default is `1`. With the half-EXTREME tolerances the trigger is
+designed to fire near-monotonically, so dipping below threshold once
+is a reliable convergence signal. Override only if you have a
+specific reason — typically you don't.
+
+- **Higher (3+)** for unusually noisy MLIPs or seeds where the
+  gradient norm wobbles a lot near convergence.
+- Stay at 1 for the shipped recipe.
+
+## Disabling the trigger
+
+`threshold: null` (the default if you omit it) skips the convergence
+check entirely and always runs the full `num_optimizer_iterations`.
+Use this for:
+
+- The initial pilot pass when you genuinely don't know `F2_target`
+  yet.
+- Fixed-iteration-budget runs (benchmarks, schedule-driven sweeps).
+
+## Monitoring loss and TS
+
+Convergence is driven by the gradient norm. To also see the loss
+integral $\int \mathcal{L}\,\mathrm{d}t$ and the transition state
+energy / force per iteration, set on `Popcornn(...)`:
+
+```python
+Popcornn(..., track_loss=True, track_ts=True)
+```
+
+`track_loss=True` runs a detached scalar-loss integral each iter at
+the same `(rtol, atol)`. `track_ts=True` triggers `path.ts_search`
+each iter, populating `path.ts_time`, `path.ts_energy`,
+`path.ts_force`, and `path.barrier`. Both cost extra forward passes
+— enable for diagnostic runs, leave off for production sweeps.
+
+The per-iter stdout columns and the JSONL metrics log
+(`metrics_log_path`) both pick these up automatically; see
+`Popcornn._StageLogger`.
+
+## Where the formula comes from
+
+The `threshold = δ · 2·σ_min · F2_target` relationship is derived
+step-by-step in [derivation](derivation.md) from the pseudo-Huber
+gradient, the IBP cancellation at pinned endpoints, and the
+σ_min(J) bound between param-space and config-space norms. Read it
+when you want to re-derive a constant after changing the path
+representation, loss family, or target quantity.
