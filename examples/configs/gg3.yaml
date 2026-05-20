@@ -22,9 +22,6 @@ optimization_params:
       optimizer:
         name: adam
         lr: 1.0e-2
-      lr_scheduler:
-        name: cosineannealinglr
-        T_max: 1000
       threshold: 0.1
     num_optimizer_iterations: 1000
   - potential_params:
@@ -42,8 +39,5 @@ optimization_params:
       optimizer:
         name: adam
         lr: 1.0e-2
-      lr_scheduler:
-        name: cosineannealinglr
-        T_max: 1000
       threshold: 5.0e-3
     num_optimizer_iterations: 1000

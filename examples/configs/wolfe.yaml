@@ -24,6 +24,6 @@ optimization_params:
     optimizer_params:
       optimizer:
         name: adam
-        lr: 5.0e-3
+        lr: 1.0e-2
       threshold: 5.0e-3
     num_optimizer_iterations: 1000
