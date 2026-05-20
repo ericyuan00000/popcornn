@@ -40,7 +40,7 @@ python run.py --config configs/gg3.yaml
 When `run.py` finishes on an **atomistic** input (anything that came
 from an ASE `Atoms` list — including the `gg3` example) it writes:
 
-- `popcornn.xyz` — the optimized path as a sequence of frames.
+- `popcornn_path.xyz` — the optimized path as a sequence of frames.
 - `popcornn_ts.xyz` — the single frame at the predicted transition
   state.
 
@@ -179,7 +179,7 @@ mep.optimize_path(
 
 final_images = mep.get_discrete_path()
 ts_image = mep.get_ts()
-write("popcornn.xyz", final_images)
+write("popcornn_path.xyz", final_images)
 write("popcornn_ts.xyz", ts_image)
 ```
 
