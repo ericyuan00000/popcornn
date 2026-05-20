@@ -16,7 +16,7 @@ class RepelPotential(BasePotential):
         E_{ij} = e^{-\\alpha (r_{ij} - r_0)/r_0} + \\beta \\, r_0 / r_{ij}
 
     where ``r_0`` is the sum of covalent radii. Use this as a first
-    optimization leg with ``path_integrand_names: geodesic`` to fix atom
+    optimization stage with ``path_integrand_names: geodesic`` to fix atom
     clashes before handing the path off to an MLIP.
     """
 

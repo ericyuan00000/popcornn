@@ -35,7 +35,6 @@ dependencies = [
     "torch_geometric",
     "matplotlib",
     "ase",
-    "tqdm",
     "pytest",
     "pytest-cov",
     "PyYAML",

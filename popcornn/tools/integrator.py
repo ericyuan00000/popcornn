@@ -54,28 +54,27 @@ class PathIntegrator:
 
     def __init__(
             self,
-            method='gk15',
+            method='gk7',
             path_integrand_names=None,
             path_integrand_scales=None,
             path_integrand_kwargs=None,
-            rtol=1e-6,
-            atol=1e-7,
-            tol_mode='per_d',
+            rtol=0.5,
+            atol=2.5e-3,
+            norm='2',
             max_batch=None,
             track_loss=False,
-            loss_rtol=None,
-            loss_atol=None,
-            save_samples=False,
-            full_output=False,
+            loss_rtol=0.01,
+            loss_atol=0.0,
+            track_ts=False,
             device=None,
             dtype=None,
         ):
         """
         Parameters
         ----------
-        method : str, default="gk15"
-            torchpathint quadrature rule. ``gk15`` is the adaptive
-            Gauss–Kronrod 15-point rule; chosen as the popcornn default
+        method : str, default="gk7"
+            torchpathint quadrature rule. ``gk7`` is the adaptive
+            Gauss–Kronrod 7-point rule; chosen as the popcornn default
             after the 2026-05-12 integrator sweep (gg3 NN pseudo-Huber)
             showed it's 30% faster than ``gk21`` at identical TS quality.
             Use ``gk21`` / ``gk31`` for tighter integration if the path
@@ -92,13 +91,8 @@ class PathIntegrator:
             when present.
         rtol, atol : float
             Adaptive-quadrature tolerances on the gradient integral.
-        tol_mode : str, default='per_d'
-            Tolerance-aggregation rule passed to ``torchpathint.path_integral``.
-            ``'per_d'`` (legacy default): per-component denominator
-            ``atol + rtol·|g_d|`` aggregated RMS over D. ``'l2'``: scalar
-            denominator ``atol + rtol·|g|_2`` matches popcornn's |g|_2 trigger
-            metric directly. The 'l2' mode is ~√D looser at the same rtol —
-            scale rtol down by ~√D if you want equivalent tightness.
+        norm : str, default='2'
+            Vector norm to use for error estimation. ``"2"`` / ``"max"`` select L2 / L∞. Only relevant for adaptive Gauss-Kronrod.
         max_batch : int, optional
             Hard cap on the number of quadrature points evaluated in
             one batch. ``None`` lets torchpathint auto-size. After each
@@ -110,11 +104,11 @@ class PathIntegrator:
 
             Scope is the ``PathIntegrator`` instance. Within a single
             stage / optimizer loop, persistence is automatic. Across
-            stages built by ``Popcornn._optimize_leg`` (one fresh
-            integrator per leg) it does **not** carry over — that's
-            intentional, since different legs typically use different
+            stages built by ``Popcornn._optimize_stage`` (one fresh
+            integrator per stage) it does **not** carry over — that's
+            intentional, since different stages typically use different
             potentials with different memory profiles. Multi-stage
-            harnesses that *do* know their later legs share a potential
+            harnesses that *do* know their later stages share a potential
             can thread the value explicitly::
 
                 integ1 = PathIntegrator(...)
@@ -130,42 +124,20 @@ class PathIntegrator:
         loss_rtol, loss_atol : float, optional
             Tolerances for the detached loss integral. Default to
             ``rtol``/``atol``.
-        save_samples : bool, default=False
-            If True, capture ``(t, energies, dE/dt)`` at every quadrature
-            point evaluated during ``integrate_path`` and attach a
-            ``SamplesCache`` to the returned ``IntegralOutput.samples``.
-            Energies, forces, and velocities are forced into resolution
-            via ``evaluate_integrand_sum(also_resolve=('energies',
-            'forces', 'velocities'))``; ``dE/dt`` is the scalar
-            ``-(F·v).sum(-1)``, precomputed so the consumer doesn't need
-            to carry the full ``[D]`` force around. Since
-            ``BasePath.forward`` calls the potential exactly once per
-            evaluation regardless of which fields are requested, this
-            adds no path-forward calls beyond the existing gradient pass.
-            Implies ``full_output=True`` (``_stitch_samples`` needs ``.t``).
-        full_output : bool, default=False
-            Forwarded to ``torchpathint.path_integral``. When True, the
-            returned ``IntegralOutput`` carries the per-interval mesh
-            ``.t`` and per-point evaluations ``.y``; when False those
-            are ``None``. Set this on the integrator from outside when
-            something downstream needs the diagnostic mesh — e.g.
-            popcornn's per-iter JSON dump (``output_dir`` set). The
-            effective value is OR-ed with ``save_samples``.
         device : torch.device
         dtype : torch.dtype
         """
         self.method = method
         self.atol = atol
         self.rtol = rtol
-        self.tol_mode = tol_mode
+        self.norm = norm
         # Loss integral is debug-only; let it run at its own (looser by
         # default) tolerance rather than paying for gradient-grade accuracy.
         self.track_loss = track_loss
-        self.loss_rtol = loss_rtol if loss_rtol is not None else rtol
-        self.loss_atol = loss_atol if loss_atol is not None else atol
+        self.loss_rtol = loss_rtol
+        self.loss_atol = loss_atol
+        self.track_ts = track_ts
         self.max_batch = max_batch
-        self.save_samples = save_samples
-        self.full_output = full_output
         self.device = device
         self.dtype = dtype
         self.N_integrals = 0
@@ -255,7 +227,7 @@ class PathIntegrator:
         # so we reuse them rather than re-evaluating, and store only the
         # scalar so the consumer doesn't carry [D]-shaped forces around.
         sample_buffer: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
-        also_resolve = ('energies', 'forces', 'velocities') if self.save_samples else ()
+        also_resolve = ('energies', 'forces', 'velocities') if self.track_ts else ()
 
         def f(t_flat):
             l, variables = evaluate_integrand_sum(
@@ -264,7 +236,7 @@ class PathIntegrator:
                 path,
                 also_resolve=also_resolve,
             )
-            if self.save_samples:
+            if self.track_ts:
                 dEdt = -(variables['forces'] * variables['velocities']).sum(dim=-1)
                 sample_buffer.append((
                     t_flat.detach().cpu(),
@@ -287,7 +259,6 @@ class PathIntegrator:
         # them: _stitch_samples (save_samples=True) or popcornn._optimize's
         # per-iter JSON dump (caller sets self.full_output=True). Off by
         # default to avoid the diagnostic-buffer overhead.
-        full_output = self.save_samples or self.full_output
         integral_output = path_integral(
             f,
             t_init_0d,
@@ -295,9 +266,8 @@ class PathIntegrator:
             method=self.method,
             atol=self.atol,
             rtol=self.rtol,
-            tol_mode=self.tol_mode,
+            norm=self.norm,
             max_batch=self.max_batch,
-            full_output=full_output,
             device=self.device,
             dtype=self.dtype,
         )
@@ -327,10 +297,14 @@ class PathIntegrator:
         # check. L∞ is closer to MLP-size-independent than L2 — the latter scales
         # with √D and forces the threshold to be retuned per parameter count.
         # Also expose L2 for monitoring (cheap on the same flat tensor).
-        integral_output.grad_norm = flat.abs().max()
-        integral_output.grad_norm_2 = flat.norm()
+        if self.norm == '2':
+            integral_output.grad_norm = flat.norm()
+        elif self.norm == 'max':
+            integral_output.grad_norm = flat.abs().max()
+        else:
+            raise ValueError(f"Unsupported norm {self.norm!r} (choose '2' or 'max').")
 
-        if self.save_samples:
+        if self.track_ts:
             integral_output.samples = self._stitch_samples(sample_buffer, integral_output.t)
         else:
             integral_output.samples = None
@@ -350,7 +324,7 @@ class PathIntegrator:
                 method=self.method,
                 atol=self.loss_atol,
                 rtol=self.loss_rtol,
-                tol_mode=self.tol_mode,
+                norm=self.norm,
                 max_batch=self.max_batch,
                 device=self.device,
                 dtype=self.dtype,
@@ -365,39 +339,25 @@ class PathIntegrator:
         return integral_output
 
     def _stitch_samples(self, sample_buffer, accepted_t):
-        """Reassemble per-call (t, E, dEdt) buffer entries into a flat
-        ``SamplesCache`` aligned with ``accepted_t.flatten()``.
+        """Flatten the per-call ``(t, E, dEdt)`` buffer into a single
+        ``SamplesCache`` containing **every** captured evaluation —
+        including rejected-refinement points that did not make it into
+        the accepted-quadrature subset.
 
-        torchpathint passes the same ``t_eval_pending`` tensor to ``f``
-        and indexes it into ``accepted_t_eval``, so the float bytes of
-        an accepted-point t are byte-identical to one of the rows we
-        captured. Refinement iterations may leave rejected-interval
-        points in the buffer; the byte-keyed lookup just skips them.
+        Previously this filtered by byte-key to ``accepted_t``; the
+        rejected refinement evals were discarded. Keeping them lets
+        downstream consumers (TS search, diagnostic plots) see the full
+        sampling pattern the integrator explored.
+
+        ``accepted_t`` is no longer consumed but is kept in the signature
+        for call-site compatibility. Output is sorted by ``time`` so
+        consumers can scan in order without an extra ``argsort``.
         """
-        lookup: dict[bytes, tuple[torch.Tensor, torch.Tensor]] = {}
-        for t_chunk, e_chunk, dedt_chunk in sample_buffer:
-            t_np = t_chunk.numpy()
-            for i in range(t_np.shape[0]):
-                lookup[t_np[i].tobytes()] = (e_chunk[i], dedt_chunk[i])
-
-        flat_t = accepted_t.detach().cpu().flatten()
-        es: list[torch.Tensor] = []
-        dedts: list[torch.Tensor] = []
-        flat_t_np = flat_t.numpy()
-        for i in range(flat_t.shape[0]):
-            key = flat_t_np[i].tobytes()
-            entry = lookup.get(key)
-            if entry is None:
-                raise RuntimeError(
-                    "save_samples: accepted t has no matching captured "
-                    "evaluation. The byte-identity invariant between "
-                    "torchpathint's t_eval_pending and accepted_t was "
-                    "violated; check whether the integrator was modified."
-                )
-            es.append(entry[0])
-            dedts.append(entry[1])
-
-        time = flat_t.to(self.device)
-        energies = torch.stack(es, dim=0).to(self.device)
-        dEdt = torch.stack(dedts, dim=0).to(self.device)
-        return SamplesCache(time=time, energies=energies, dEdt=dEdt)
+        if not sample_buffer:
+            empty = torch.empty(0, device=self.device, dtype=self.dtype)
+            return SamplesCache(time=empty, energies=empty, dEdt=empty)
+        time = torch.cat([t_chunk for t_chunk, _, _ in sample_buffer], dim=0).to(self.device).flatten()
+        energies = torch.cat([e_chunk for _, e_chunk, _ in sample_buffer], dim=0).to(self.device)
+        dEdt = torch.cat([dedt_chunk for _, _, dedt_chunk in sample_buffer], dim=0).to(self.device)
+        order = torch.argsort(time)
+        return SamplesCache(time=time[order], energies=energies[order], dEdt=dEdt[order])
