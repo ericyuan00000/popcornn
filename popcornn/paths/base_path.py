@@ -400,10 +400,11 @@ class BasePath(torch.nn.Module):
             return_energies=True,
             return_forces=True,
         )
-        winner = int(torch.argmax(cand_out.energies).item())
+        energies = cand_out.energies.detach().cpu()
+        forces = cand_out.forces.detach().cpu()
+        winner = int(torch.argmax(energies).item())
 
         self.ts_time = candidate_times[winner]
-        self.ts_energy = cand_out.energies[winner]
-        self.ts_force = cand_out.forces[winner]
-        # Barrier = E_TS - E_reactant. Index 0 is t=0 by construction.
-        self.barrier = self.ts_energy - cand_out.energies[0]
+        self.ts_energy = energies[winner]
+        self.ts_force = forces[winner]
+        self.barrier = self.ts_energy - energies[0]
